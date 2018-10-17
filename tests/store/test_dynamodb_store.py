@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import os
-import shutil
 import unittest
 import uuid
 
@@ -10,7 +9,6 @@ import time
 import pytest
 
 import boto3
-from mock import Mock
 from moto.dynamodb2 import mock_dynamodb2
 
 from mlflow.entities import Experiment, Metric, Param, RunTag, ViewType, RunInfo
@@ -32,9 +30,18 @@ class TestDynamodbStore(unittest.TestCase):
         self._populate_tables()
         self.maxDiff = None
 
+    def tearDown(self):
+        self.mock.stop()
+
+    def _get_dynamodb_client(self):
+        return boto3.client('dynamodb')
+
+    def _get_dynamodb_resource(self):
+        return boto3.resource('dynamodb')
+
     def _create_tables(self):
         # create a mock dynamodb client, and create tables
-        client = boto3.client('dynamodb')
+        client = self._get_dynamodb_client()
         response = client.create_table(
             AttributeDefinitions=[
                 {
@@ -87,7 +94,7 @@ class TestDynamodbStore(unittest.TestCase):
                 'WriteCapacityUnits': 1
             },
         )
-        print('create table experiment')
+        print('create table experiment', response['ResponseMetadata']['HTTPStatusCode'])
         response = client.create_table(
             AttributeDefinitions=[
                 {
@@ -139,7 +146,7 @@ class TestDynamodbStore(unittest.TestCase):
                 'WriteCapacityUnits': 1
             },
         )
-        print('create table run')
+        print('create table run', response['ResponseMetadata']['HTTPStatusCode'])
         for key in ['tag', 'param', 'metric']:
             table_name = '{}_run_{}'.format(self.table_prefix, key)
             response = client.create_table(
@@ -171,15 +178,15 @@ class TestDynamodbStore(unittest.TestCase):
                     'WriteCapacityUnits': 1
                 },
             )
-            print('create table', table_name)
+            print('create table', table_name, response['ResponseMetadata']['HTTPStatusCode'])
 
     def _write_table(self, name, d):
         # Use mock dnamodb to put to table
-        dynamodb = boto3.resource('dynamodb')
+        dynamodb = self._get_dynamodb_resource()
         table_name = '_'.join([self.table_prefix, name])
         table = dynamodb.Table(table_name)
         response = table.put_item(Item=d)
-        print('write table', name)
+        print('write table', name, response['ResponseMetadata']['HTTPStatusCode'])
 
     def _populate_tables(self,
                          exp_count=3,
@@ -190,8 +197,7 @@ class TestDynamodbStore(unittest.TestCase):
         self.experiments = [random_int(100, int(1e9)) for _ in range(exp_count)]
         self.exp_data = {}
         self.run_data = {}
-        # Include default experiment
-        self.experiments[0] = Experiment.DEFAULT_EXPERIMENT_ID
+        self.experiments.append(Experiment.DEFAULT_EXPERIMENT_ID)
         for exp in self.experiments:
             # create experiment
             exp_folder = os.path.join(self.table_prefix, str(exp))
@@ -222,7 +228,6 @@ class TestDynamodbStore(unittest.TestCase):
                 self._write_table('run', run_info)
                 self.run_data[run_uuid] = run_info
                 # params
-                params_folder = os.path.join(run_folder, FileStore.PARAMS_FOLDER_NAME)
                 params = {}
                 for _ in range(param_count):
                     param_name = random_str(random_int(4, 12))
@@ -235,12 +240,10 @@ class TestDynamodbStore(unittest.TestCase):
                     params[param_name] = param_value
                 self.run_data[run_uuid]["params"] = params
                 # metrics
-                metrics_folder = os.path.join(run_folder, FileStore.METRICS_FOLDER_NAME)
                 metrics = {}
                 for _ in range(metric_count):
                     metric_name = random_str(random_int(6, 10))
                     timestamp = int(time.time())
-                    metric_file = os.path.join(metrics_folder, metric_name)
                     values, values_map = [], []
                     for _ in range(values_count):
                         metric_value = random_int(100, 2000)
@@ -257,9 +260,6 @@ class TestDynamodbStore(unittest.TestCase):
                     })
                     metrics[metric_name] = values
                 self.run_data[run_uuid]["metrics"] = metrics
-
-    def tearDown(self):
-        self.mock.stop()
 
     def test_list_experiments(self):
         fs = DynamodbStore(self.table_prefix)
@@ -423,9 +423,10 @@ class TestDynamodbStore(unittest.TestCase):
             for run_info in run_infos:
                 run_uuid = run_info.run_uuid
                 dict_run_info = self.run_data[run_uuid]
-                dict_run_info.pop("metrics")
-                dict_run_info.pop("params")
-                dict_run_info.pop("tags")
+                #  In some cases metrics might be missing
+                dict_run_info.pop("metrics", None)
+                dict_run_info.pop("params", None)
+                dict_run_info.pop("tags", None)
                 dict_run_info['lifecycle_stage'] = RunInfo.ACTIVE_LIFECYCLE
                 self.assertEqual(dict_run_info, dict(run_info))
 

@@ -1,12 +1,10 @@
 import os
 
 import uuid
-import six
 
 import boto3
 from boto3.dynamodb.conditions import Key, And
-from botocore import exceptions
-from decimal import *
+from decimal import Decimal
 
 from mlflow.entities import Experiment, Metric, Param, Run, RunData, RunInfo, RunStatus, RunTag, \
                             ViewType
@@ -232,7 +230,7 @@ class DynamodbStore(AbstractStore):
         """
         try:
             return _dict_to_experiment(self._get_experiment(experiment_id))
-        except Exception as e:
+        except Exception:
             raise MlflowException("Could not find experiment with ID %s" % experiment_id,
                                   databricks_pb2.RESOURCE_DOES_NOT_EXIST)
 
@@ -264,31 +262,24 @@ class DynamodbStore(AbstractStore):
         return response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Attributes' in response
 
     def delete_experiment(self, experiment_id):
-        try:
-            return self._update_experiment_status(experiment_id,
-                                                  RunInfo.ACTIVE_LIFECYCLE,
-                                                  RunInfo.DELETED_LIFECYCLE)
-        except exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                msg = "Could not find experiment with ID %s" % experiment_id,
-                raise MlflowException(databricks_pb2.RESOURCE_DOES_NOT_EXIST)
-
-    def restore_experiment(self, experiment_id):
-        try:
-            return self._update_experiment_status(experiment_id,
-                                                  RunInfo.DELETED_LIFECYCLE,
-                                                  RunInfo.ACTIVE_LIFECYCLE)
-        except exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                msg = "Could not find deleted experiment with ID %d" % experiment_id
-                raise MlflowException(msg, databricks_pb2.RESOURCE_DOES_NOT_EXIST)
-
-    def _rename_experiment(self, experiment_id, new_name):
         experiment = self.get_experiment(experiment_id)
         if experiment.lifecycle_stage != Experiment.ACTIVE_LIFECYCLE:
-            raise Exception("Cannot rename experiment in non-active lifecycle stage."
-                            " Current stage: %s" % experiment.lifecycle_stage)
+            raise MlflowException("Could not find experiment with ID %s" % experiment_id,
+                                  databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+        return self._update_experiment_status(experiment_id,
+                                              RunInfo.ACTIVE_LIFECYCLE,
+                                              RunInfo.DELETED_LIFECYCLE)
 
+    def restore_experiment(self, experiment_id):
+        experiment = self.get_experiment(experiment_id)
+        if experiment.lifecycle_stage != Experiment.DELETED_LIFECYCLE:
+            raise MlflowException("Could not find deleted experiment with ID %s" % experiment_id,
+                                  databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+        return self._update_experiment_status(experiment_id,
+                                              RunInfo.DELETED_LIFECYCLE,
+                                              RunInfo.ACTIVE_LIFECYCLE)
+
+    def _rename_experiment(self, experiment_id, new_name):
         dynamodb = self._get_dynamodb_resource()
         table_name = '_'.join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
@@ -309,12 +300,11 @@ class DynamodbStore(AbstractStore):
             return response['Attributes']
 
     def rename_experiment(self, experiment_id, new_name):
-        try:
-            return _dict_to_experiment(self._rename_experiment(experiment_id, new_name))
-        except exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                raise Exception("Cannot rename experiment in non-active lifecycle stage."
-                                " Current stage: %s" % experiment.lifecycle_stage)
+        experiment = self.get_experiment(experiment_id)
+        if experiment.lifecycle_stage != Experiment.ACTIVE_LIFECYCLE:
+            raise Exception("Cannot rename experiment in non-active lifecycle stage."
+                            " Current stage: %s" % experiment.lifecycle_stage)
+        return _dict_to_experiment(self._rename_experiment(experiment_id, new_name))
 
     def _get_run_info(self, run_uuid):
         dynamodb = self._get_dynamodb_resource()
@@ -352,25 +342,19 @@ class DynamodbStore(AbstractStore):
 
     def delete_run(self, run_id):
         _validate_run_id(run_id)
-        try:
-            return self._update_run_status(run_id,
-                                           RunInfo.ACTIVE_LIFECYCLE,
-                                           RunInfo.DELETED_LIFECYCLE)
-        except exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                raise MlflowException("Could not find run with ID %s" % run_id,
-                                      databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+        run_info = self._get_run_info(run_id)
+        check_run_is_active(run_info)
+        return self._update_run_status(run_id,
+                                       RunInfo.ACTIVE_LIFECYCLE,
+                                       RunInfo.DELETED_LIFECYCLE)
 
     def restore_run(self, run_id):
         _validate_run_id(run_id)
-        try:
-            return self._update_run_status(run_id,
-                                           RunInfo.DELETED_LIFECYCLE,
-                                           RunInfo.ACTIVE_LIFECYCLE)
-        except exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                raise MlflowException("Could not find deleted run with ID %d" % run_id,
-                                      databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+        run_info = self._get_run_info(run_id)
+        check_run_is_deleted(run_info)
+        return self._update_run_status(run_id,
+                                       RunInfo.DELETED_LIFECYCLE,
+                                       RunInfo.ACTIVE_LIFECYCLE)
 
     def _update_run_info(self, run_uuid, run_status, end_time):
         dynamodb = self._get_dynamodb_resource()
@@ -378,8 +362,7 @@ class DynamodbStore(AbstractStore):
         table = dynamodb.Table(table_name)
         response = table.update_item(
             Key={
-                'run_uuid': run_info.run_uuid,
-                'experiment_id': run_info.experiment_id,
+                'run_uuid': run_uuid,
             },
             ConditionExpression="lifecycle_stage = :l",
             UpdateExpression="SET #status = :run_status, #end_time = :end_time",
@@ -400,12 +383,9 @@ class DynamodbStore(AbstractStore):
 
     def update_run_info(self, run_uuid, run_status, end_time):
         _validate_run_id(run_uuid)
-        try:
-            return self._update_run_info(run_uuid, run_status, end_time)
-        except exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                raise MlflowException("Could not update run with ID %d" % run_id,
-                                      databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+        run_info = self._get_run_info(run_uuid)
+        check_run_is_active(run_info)
+        return self._update_run_info(run_uuid, run_status, end_time)
 
     def _create_run_info(self, run_info_dict):
         dynamodb = self._get_dynamodb_resource()
@@ -497,7 +477,6 @@ class DynamodbStore(AbstractStore):
         _validate_run_id(run_uuid)
         _validate_metric_name(metric_key)
         metrics = self._get_run_metrics(run_uuid, metric_key)
-        print('got metrics', metrics, metric_key)
         if not metrics:
             raise MlflowException("Metric '%s' not found under run '%s'" % (metric_key, run_uuid),
                                   databricks_pb2.RESOURCE_DOES_NOT_EXIST)
@@ -615,6 +594,7 @@ class DynamodbStore(AbstractStore):
         return []
 
     def search_runs(self, experiment_ids, search_expressions, run_view_type):
+        #  Only return run_info not full runs
         matched_runs = []
         for experiment_id in experiment_ids:
             run_uuids = self._list_runs_uuids(experiment_id, run_view_type)
@@ -670,7 +650,6 @@ class DynamodbStore(AbstractStore):
         dynamodb = self._get_dynamodb_resource()
         table_name = '_'.join([self.table_prefix, DynamodbStore.PARAMS_TABLE])
         table = dynamodb.Table(table_name)
-        print('param', table_name, run_uuid, param)
         response = table.put_item(
             Item={
                 'run_uuid': run_uuid,
