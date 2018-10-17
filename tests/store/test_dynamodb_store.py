@@ -34,10 +34,10 @@ class TestDynamodbStore(unittest.TestCase):
         self.mock.stop()
 
     def _get_dynamodb_client(self):
-        return boto3.client('dynamodb')
+        return boto3.client('dynamodb', region_name='us-west-1')
 
     def _get_dynamodb_resource(self):
-        return boto3.resource('dynamodb')
+        return boto3.resource('dynamodb', region_name='us-west-1')
 
     def _create_tables(self):
         # create a mock dynamodb client, and create tables
