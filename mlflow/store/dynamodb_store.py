@@ -21,11 +21,18 @@ from mlflow.utils.mlflow_tags import MLFLOW_RUN_NAME, MLFLOW_PARENT_RUN_ID
 
 from mlflow.utils.search_utils import does_run_match_clause
 
-_TRACKING_TABLE_PREFIX_VAR = "MLFLOW_TRACKING_TABLE_PREFIX"
+_DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
+_DYNAMODB_TABLE_PREFIX_VAR = "MLFLOW_DYNAMODB_TABLE_PREFIX"
+
+
+def _default_dynamodb_resource():
+    dynamodb_endpoint_url = get_env(_DYNAMODB_ENDPOINT_URL_VAR)
+    return boto3.resource('dynamodb', endpoint_url=dynamodb_endpoint_url)
+    return self.dynamodb_resource
 
 
 def _default_table_prefix():
-    return get_env(_TRACKING_TABLE_PREFIX_VAR) or "mlflow"
+    return get_env(_DYNAMODB_TABLE_PREFIX_VAR) or "mlflow"
 
 
 def _dict_to_experiment(d):
@@ -114,19 +121,18 @@ class DynamodbStore(AbstractStore):
     PARAMS_TABLE = "run_param"
     TAGS_TABLE = "run_tag"
 
-    def __init__(self, table_prefix=None, use_gsi=False, use_projections=False):
+    def __init__(self, dynamodb_resource=None, table_prefix=None, use_gsi=False, use_projections=False):
         """
         Create a new DynamodbStore with artifact root URI.
         """
         super(DynamodbStore, self).__init__()
+        self.dynamodb_resource = dynamodb_resource or _default_dynamodb_resource()
         self.table_prefix = table_prefix or _default_table_prefix()
         self.use_gsi = use_gsi
         self.use_projections = use_projections
 
     def _get_dynamodb_resource(self):
-        # TODO: Consider if we need to specify the region?
-        dynamodb_endpoint_url = os.environ.get('MLFLOW_DYNAMODB_ENDPOINT_URL')
-        return boto3.resource('dynamodb', endpoint_url=dynamodb_endpoint_url)
+        return self.dynamodb_resource
 
     def _list_experiments(self, view_type=None, name=None):
         dynamodb = self._get_dynamodb_resource()
