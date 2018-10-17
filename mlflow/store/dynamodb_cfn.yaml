@@ -1,0 +1,221 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  PrefixParameter:
+    Type: String
+    Default: mlflow
+    Description: Prefix for ddb tables
+  RCUParameter:
+    Type: Number
+    Default: 1
+    Description: Read Capacity Units for DynamoDb tables
+  WCUParameter:
+    Type: Number
+    Default: 1
+    Description: Write Capacity Units for DynamoDb tables
+Resources:
+  ExperimentTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "experiment_id"
+          AttributeType: "N"
+        -
+          AttributeName: "lifecycle_stage"
+          AttributeType: "S"
+        -
+          AttributeName: "name"
+          AttributeType: "S"
+        # -
+        #   AttributeName: "artifact_location"
+        #   AttributeType: "S"
+        # -
+        #   AttributeName: "last_update_time"
+        #   AttributeType: "N"
+        # -
+        #   AttributeName: "creation_time"
+        #   AttributeType: "N"
+      KeySchema:
+        -
+          AttributeName: "experiment_id"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref RCUParameter
+        WriteCapacityUnits: !Ref WCUParameter
+      GlobalSecondaryIndexes:
+        -
+          IndexName: LifeCycleStage
+          KeySchema:
+            -
+              AttributeName: "lifecycle_stage"
+              KeyType: "HASH"
+            -
+              AttributeName: "name"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "KEYS_ONLY"
+          ProvisionedThroughput:
+            ReadCapacityUnits: !Ref RCUParameter
+            WriteCapacityUnits: !Ref WCUParameter
+      TableName:
+        !Join
+          - '_'
+          - - !Ref PrefixParameter
+            - 'experiment'
+  RunTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "run_uuid"
+          AttributeType: "S"
+        -
+          AttributeName: "experiment_id"
+          AttributeType: "N"
+        -
+          AttributeName: "lifecycle_stage"
+          AttributeType: "S"
+        # -
+        #   AttributeName: "name"
+        #   AttributeType: "S"
+        # -
+        #   AttributeName: "source_type"
+        #   AttributeType: "N"
+        # -
+        #   AttributeName: "source_name"
+        #   AttributeType: "S"
+        # -
+        #   AttributeName: "user_id"
+        #   AttributeType: "S"
+        # -
+        #   AttributeName: "status"
+        #   AttributeType: "N"
+        # -
+        #   AttributeName: "start_time"
+        #   AttributeType: "N"
+        # -
+        #   AttributeName: "end_time"
+        #   AttributeType: "N"
+        # -
+        #   AttributeName: "source_version"
+        #   AttributeType: "S"
+        # -
+        #   AttributeName: "entry_point_name"
+        #   AttributeType: "S"
+        # -
+        #   AttributeName: "artifact_uri"
+        #   AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "run_uuid"
+          KeyType: "HASH"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref RCUParameter
+        WriteCapacityUnits: !Ref WCUParameter
+      GlobalSecondaryIndexes:
+        -
+          IndexName: LifeCycleStage
+          KeySchema:
+            -
+              AttributeName: "lifecycle_stage"
+              KeyType: "HASH"
+            -
+              AttributeName: "experiment_id"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: "KEYS_ONLY"
+          ProvisionedThroughput:
+            ReadCapacityUnits: !Ref RCUParameter
+            WriteCapacityUnits: !Ref WCUParameter
+      TableName:
+        !Join
+          - '_'
+          - - !Ref PrefixParameter
+            - 'run'
+  RunTagTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "run_uuid"
+          AttributeType: "S"
+        -
+          AttributeName: "key"
+          AttributeType: "S"
+        # -
+        #   AttributeName: "value"
+        #   AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "run_uuid"
+          KeyType: "HASH"
+        -
+          AttributeName: "key"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref RCUParameter
+        WriteCapacityUnits: !Ref WCUParameter
+      TableName:
+        !Join
+          - '_'
+          - - !Ref PrefixParameter
+            - 'run'
+            - 'tag'
+  RunParamTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "run_uuid"
+          AttributeType: "S"
+        -
+          AttributeName: "key"
+          AttributeType: "S"
+        # -
+        #   AttributeName: "value"
+        #   AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "run_uuid"
+          KeyType: "HASH"
+        -
+          AttributeName: "key"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref RCUParameter
+        WriteCapacityUnits: !Ref WCUParameter
+      TableName:
+        !Join
+          - '_'
+          - - !Ref PrefixParameter
+            - 'run'
+            - 'param'
+  RunMetricTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "run_uuid"
+          AttributeType: "S"
+        -
+          AttributeName: "key"
+          AttributeType: "S"
+        # -
+        #   AttributeName: "metrics"
+        #   AttributeType: "L"
+      KeySchema:
+        -
+          AttributeName: "run_uuid"
+          KeyType: "HASH"
+        -
+          AttributeName: "key"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: !Ref RCUParameter
+        WriteCapacityUnits: !Ref WCUParameter
+      TableName:
+        !Join
+          - '_'
+          - - !Ref PrefixParameter
+            - 'run'
+            - 'metric'
