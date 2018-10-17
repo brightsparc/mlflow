@@ -29,75 +29,89 @@ from mlflow.utils.search_utils import does_run_match_clause
 
 _TRACKING_TABLE_PREFIX_VAR = "MLFLOW_TRACKING_TABLE_PREFIX"
 
+
 def _default_table_prefix():
     return get_env(_TRACKING_TABLE_PREFIX_VAR) or "mlflow"
+
 
 def _dict_to_experiment(d):
     return Experiment(
         experiment_id=d['experiment_id'],
         name=d['name'],
-        artifact_location=d.get('artifact_location',''),
-        lifecycle_stage=d.get('lifecycle_stage','active'), # default to active
+        artifact_location=d.get('artifact_location', ''),
+        lifecycle_stage=d.get('lifecycle_stage', 'active')
     )
 
 
 def _dict_to_run_info(d):
     return RunInfo(
-        run_uuid=d['run_uuid'], # required
-        experiment_id=int(d['experiment_id']),  # required
-        name=d['name'], # required?
+        run_uuid=d['run_uuid'],
+        experiment_id=int(d['experiment_id']),
+        name=d['name'],
         source_type=int(d.get('source_type') or 0),
-        source_name=d.get('source_name',''),
-        entry_point_name=d.get('entry_point_name',''),
-        user_id=d.get('user_id',''),
+        source_name=d.get('source_name', ''),
+        entry_point_name=d.get('entry_point_name', ''),
+        user_id=d.get('user_id', ''),
         status=int(d.get('status') or 0),
         start_time=int(d.get('start_time') or 0),
         end_time=int(d.get('end_time') or 0),
-        source_version=d.get('source_version',''),
-        lifecycle_stage=d.get('lifecycle_stage','active'), # default to active
-        artifact_uri=d.get('artifact_uri',''),
+        source_version=d.get('source_version', ''),
+        lifecycle_stage=d.get('lifecycle_stage', 'active'),
+        artifact_uri=d.get('artifact_uri', ''),
     )
+
 
 def _list_to_run_tag(l):
     return [RunTag(
-        key=d['key'], # required
-        value=str(d.get('value',''))
+        key=d['key'],
+        value=str(d.get('value', ''))
     ) for d in l]
+
 
 def _list_to_run_param(l):
     return [Param(
-        key=d['key'], # required
-        value=str(d.get('value',''))
+        key=d['key'],
+        value=str(d.get('value', ''))
     ) for d in l]
+
 
 def _sort_metrics(l):
     return sorted(l, key=lambda x: int(x['timestamp']))
 
+
 # Return a list of metrics with the first value (don't sort)
 def _list_to_run_metric(l):
     return [Metric(key=rm['key'],
-               value=float(rm['metrics'][0]['value']),
-               timestamp=int(rm['metrics'][0]['timestamp'])) for rm in l]
+            value=float(rm['metrics'][0]['value']),
+            timestamp=int(rm['metrics'][0]['timestamp'])) for rm in l]
+
 
 def _dict_to_run_metric_history(rm):
     return [Metric(key=rm['key'], value=float(m['value']), timestamp=int(m['timestamp']))
             for m in _sort_metrics(rm['metrics'])]
 
+
 def _entity_to_dict(obj):
     return {k: None if v == '' else v for k, v in dict(obj).items()}
 
+
 def _filter_view_type(d, view_type=None):
-    return not view_type or view_type==ViewType.ALL or \
-        (view_type==ViewType.ACTIVE_ONLY and d.get('lifecycle_stage')==RunInfo.ACTIVE_LIFECYCLE) or \
-        (view_type==ViewType.DELETED_ONLY and d.get('lifecycle_stage')==RunInfo.DELETED_LIFECYCLE)
+    return not view_type or view_type == ViewType.ALL or \
+        (view_type == ViewType.ACTIVE_ONLY and
+            d.get('lifecycle_stage') == RunInfo.ACTIVE_LIFECYCLE) or \
+        (view_type == ViewType.DELETED_ONLY and
+            d.get('lifecycle_stage') == RunInfo.DELETED_LIFECYCLE)
+
 
 def _filter_experiment(experiments, view_type=None, name=None):
     return [e for e in experiments if _filter_view_type(e, view_type)
-            and (not name or e['name']==name)]
+            and (not name or e['name'] == name)]
+
 
 def _filter_run(runs, view_type=None, experiment_id=None):
     return [r for r in runs if _filter_view_type(r, view_type)
-            and (not experiment_id or r['experiment_id']==experiment_id)]
+            and (not experiment_id or r['experiment_id'] == experiment_id)]
+
 
 class DynamodbStore(AbstractStore):
     EXPERIMENT_TABLE = "experiment"
@@ -122,7 +136,7 @@ class DynamodbStore(AbstractStore):
 
     def _list_experiments(self, view_type=None, name=None):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.EXPERIMENT_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
         condition = None
         if self.use_gsi and (view_type or name):
@@ -130,7 +144,7 @@ class DynamodbStore(AbstractStore):
                 condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE)
             elif view_type == ViewType.DELETED_ONLY:
                 condition = Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
-            else: # ViewType.ALL
+            else:  # ViewType.ALL
                 condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE) or \
                             Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
             if name:
@@ -161,10 +175,8 @@ class DynamodbStore(AbstractStore):
                 response = table.scan(
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
-
             if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
                 items += _filter_experiment(response['Items'], view_type, name)
-
         return items
 
     def list_experiments(self, view_type=ViewType.ACTIVE_ONLY):
@@ -173,7 +185,7 @@ class DynamodbStore(AbstractStore):
 
     def _create_experiment_with_id(self, name, experiment_id, artifact_uri):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.EXPERIMENT_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
         exp = Experiment(
             experiment_id=experiment_id,
@@ -204,7 +216,7 @@ class DynamodbStore(AbstractStore):
 
     def _get_experiment(self, experiment_id):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.EXPERIMENT_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
         response = table.get_item(
             Key={
@@ -234,9 +246,11 @@ class DynamodbStore(AbstractStore):
             return _dict_to_experiment(exps[0])
         return None
 
-    def _update_experiment_status(self, experiment_id, before_lifecycle_stage, after_lifecycle_stage):
+    def _update_experiment_status(self, experiment_id,
+                                  before_lifecycle_stage, after_lifecycle_stage):
+
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.EXPERIMENT_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
         response = table.update_item(
             Key={
@@ -256,20 +270,22 @@ class DynamodbStore(AbstractStore):
     def delete_experiment(self, experiment_id):
         try:
             return self._update_experiment_status(experiment_id,
-            RunInfo.ACTIVE_LIFECYCLE, RunInfo.DELETED_LIFECYCLE)
+                                                  RunInfo.ACTIVE_LIFECYCLE,
+                                                  RunInfo.DELETED_LIFECYCLE)
         except exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                raise MlflowException("Could not find experiment with ID %s" % experiment_id,
-                                      databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                msg = "Could not find experiment with ID %s" % experiment_id,
+                raise MlflowException(databricks_pb2.RESOURCE_DOES_NOT_EXIST)
 
     def restore_experiment(self, experiment_id):
         try:
             return self._update_experiment_status(experiment_id,
-                RunInfo.DELETED_LIFECYCLE, RunInfo.ACTIVE_LIFECYCLE)
+                                                  RunInfo.DELETED_LIFECYCLE,
+                                                  RunInfo.ACTIVE_LIFECYCLE)
         except exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                raise MlflowException("Could not find deleted experiment with ID %d" % experiment_id,
-                                      databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                msg = "Could not find deleted experiment with ID %d" % experiment_id
+                raise MlflowException(msg, databricks_pb2.RESOURCE_DOES_NOT_EXIST)
 
     def _rename_experiment(self, experiment_id, new_name):
         experiment = self.get_experiment(experiment_id)
@@ -278,7 +294,7 @@ class DynamodbStore(AbstractStore):
                             " Current stage: %s" % experiment.lifecycle_stage)
 
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.EXPERIMENT_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
         response = table.update_item(
             Key={
@@ -306,7 +322,7 @@ class DynamodbStore(AbstractStore):
 
     def _get_run_info(self, run_uuid):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.RUN_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.RUN_TABLE])
         table = dynamodb.Table(table_name)
         response = table.get_item(
             Key={
@@ -321,7 +337,7 @@ class DynamodbStore(AbstractStore):
 
     def _update_run_status(self, run_uuid, before_lifecycle_stage, after_lifecycle_stage):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.RUN_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.RUN_TABLE])
         table = dynamodb.Table(table_name)
         response = table.update_item(
             Key={
@@ -339,18 +355,22 @@ class DynamodbStore(AbstractStore):
         return response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Attributes' in response
 
     def delete_run(self, run_id):
-        _validate_run_id(run_id) # NOTE: this requires run_id to match abstract
+        _validate_run_id(run_id)
         try:
-            return self._update_run_status(run_id, RunInfo.ACTIVE_LIFECYCLE, RunInfo.DELETED_LIFECYCLE)
+            return self._update_run_status(run_id,
+                                           RunInfo.ACTIVE_LIFECYCLE,
+                                           RunInfo.DELETED_LIFECYCLE)
         except exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
                 raise MlflowException("Could not find run with ID %s" % run_id,
                                       databricks_pb2.RESOURCE_DOES_NOT_EXIST)
 
     def restore_run(self, run_id):
-        _validate_run_id(run_id) # NOTE: this requires run_id to match abstract
+        _validate_run_id(run_id)
         try:
-            return self._update_run_status(run_id, RunInfo.DELETED_LIFECYCLE, RunInfo.ACTIVE_LIFECYCLE)
+            return self._update_run_status(run_id,
+                                           RunInfo.DELETED_LIFECYCLE,
+                                           RunInfo.ACTIVE_LIFECYCLE)
         except exceptions.ClientError as e:
             if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
                 raise MlflowException("Could not find deleted run with ID %d" % run_id,
@@ -358,7 +378,7 @@ class DynamodbStore(AbstractStore):
 
     def _update_run_info(self, run_uuid, run_status, end_time):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.RUN_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.RUN_TABLE])
         table = dynamodb.Table(table_name)
         response = table.update_item(
             Key={
@@ -393,7 +413,7 @@ class DynamodbStore(AbstractStore):
 
     def _create_run_info(self, run_info_dict):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.RUN_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.RUN_TABLE])
         table = dynamodb.Table(table_name)
         response = table.put_item(
             Item=run_info_dict,
@@ -418,7 +438,7 @@ class DynamodbStore(AbstractStore):
                     "%s." % experiment_id,
                     databricks_pb2.INVALID_STATE)
         run_uuid = uuid.uuid4().hex
-        artifact_uri = None # TODO: Figure out how to handle artifact directory
+        artifact_uri = None  # TODO: Figure out how to handle artifact directory
         run_info = RunInfo(run_uuid=run_uuid, experiment_id=experiment_id,
                            name=run_name,
                            artifact_uri=artifact_uri, source_type=source_type,
@@ -448,7 +468,7 @@ class DynamodbStore(AbstractStore):
 
     def _get_run_metrics(self, run_uuid, metric_key=None):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.METRICS_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.METRICS_TABLE])
         table = dynamodb.Table(table_name)
         condition = Key('run_uuid').eq(run_uuid)
         if metric_key:
@@ -487,7 +507,6 @@ class DynamodbStore(AbstractStore):
                                   databricks_pb2.RESOURCE_DOES_NOT_EXIST)
         return _list_to_run_metric(metrics)[0]
 
-    # Get a list of all mewtrics
     def get_all_metrics(self, run_uuid):
         _validate_run_id(run_uuid)
         return _list_to_run_metric(self._get_run_metrics(run_uuid))
@@ -496,7 +515,7 @@ class DynamodbStore(AbstractStore):
         _validate_run_id(run_uuid)
         _validate_metric_name(metric_key)
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.METRICS_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.METRICS_TABLE])
         table = dynamodb.Table(table_name)
         response = table.get_item(
             Key={
@@ -510,7 +529,7 @@ class DynamodbStore(AbstractStore):
 
     def _get_run_params(self, run_uuid, param_name=None):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.PARAMS_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.PARAMS_TABLE])
         table = dynamodb.Table(table_name)
         condition = Key('run_uuid').eq(run_uuid)
         if param_name:
@@ -540,7 +559,7 @@ class DynamodbStore(AbstractStore):
     def get_all_tags(self, run_uuid):
         _validate_run_id(run_uuid)
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.TAGS_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.TAGS_TABLE])
         table = dynamodb.Table(table_name)
         response = table.query(
             ConsistentRead=True,
@@ -553,14 +572,14 @@ class DynamodbStore(AbstractStore):
 
     def _list_runs_uuids(self, experiment_id, view_type=None):
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.RUN_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.RUN_TABLE])
         table = dynamodb.Table(table_name)
         if self.use_gsi:
             if view_type == ViewType.ACTIVE_ONLY:
                 condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE)
             elif view_type == ViewType.DELETED_ONLY:
                 condition = Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
-            else: # ViewType.ALL
+            else:  # ViewType.ALL
                 condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE) or \
                             Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
             condition = And(condition, Key('experiment_id').eq(experiment_id))
@@ -578,11 +597,15 @@ class DynamodbStore(AbstractStore):
         return []
 
     def _get_run_list(self, runs):
-        keys = [{ 'run_uuid': r['run_uuid'] } for r in runs]
+        keys = [
+            {
+                'run_uuid': r['run_uuid']
+            } for r in runs
+        ]
         if len(keys) == 0:
             return []
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.RUN_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.RUN_TABLE])
         response = dynamodb.batch_get_item(
             RequestItems={
                table_name: {
@@ -618,7 +641,7 @@ class DynamodbStore(AbstractStore):
         run_info = self._get_run_info(run_uuid)
         check_run_is_active(run_info)
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.METRICS_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.METRICS_TABLE])
         table = dynamodb.Table(table_name)
         # NOTE: list_append is not supported with mock
         response = table.update_item(
@@ -629,8 +652,14 @@ class DynamodbStore(AbstractStore):
             UpdateExpression="SET #m = list_append(:m, if_not_exists(#m, :e))",
             ExpressionAttributeNames={'#m': 'metrics'},
             ExpressionAttributeValues={
-                 ':e': [ ],
-                 ':m': [ { "value": Decimal(str(metric.value)), "timestamp": metric.timestamp } ]
+                 ':e': [
+                 ],
+                 ':m': [
+                    {
+                        "value": Decimal(str(metric.value)),
+                        "timestamp": metric.timestamp
+                    }
+                 ],
             },
             ReturnValues="NONE",
             ReturnConsumedCapacity='TOTAL',
@@ -643,7 +672,7 @@ class DynamodbStore(AbstractStore):
         run_info = self._get_run_info(run_uuid)
         check_run_is_active(run_info)
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.PARAMS_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.PARAMS_TABLE])
         table = dynamodb.Table(table_name)
         print('param', table_name, run_uuid, param)
         response = table.put_item(
@@ -662,7 +691,7 @@ class DynamodbStore(AbstractStore):
         run_info = self._get_run_info(run_uuid)
         check_run_is_active(run_info)
         dynamodb = self._get_dynamodb_resource()
-        table_name = '_'.join([self.table_prefix,DynamodbStore.TAGS_TABLE])
+        table_name = '_'.join([self.table_prefix, DynamodbStore.TAGS_TABLE])
         table = dynamodb.Table(table_name)
         response = table.put_item(
             Item={

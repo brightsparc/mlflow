@@ -20,16 +20,16 @@ from mlflow.store.dynamodb_store import DynamodbStore
 from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID
 from tests.helper_functions import random_int, random_str
 
+
 class TestDynamodbStore(unittest.TestCase):
     def setUp(self):
         self.mock = mock_dynamodb2()
         self.mock.start()
-
-        self.table_prefix='mlflow'
+        self.table_prefix = 'mlflow'
         print('creeate tables')
         self._create_tables()
         print('populate tables')
-        self._populate_tables(exp_count=1, param_count=1, metric_count=1, values_count=3)
+        self._populate_tables()
         self.maxDiff = None
 
     def _create_tables(self):
@@ -176,18 +176,22 @@ class TestDynamodbStore(unittest.TestCase):
     def _write_table(self, name, d):
         # Use mock dnamodb to put to table
         dynamodb = boto3.resource('dynamodb')
-        table_name = '_'.join([self.table_prefix,name])
+        table_name = '_'.join([self.table_prefix, name])
         table = dynamodb.Table(table_name)
         response = table.put_item(Item=d)
         print('write table', name)
 
-    def _populate_tables(self, exp_count=3, run_count=2, param_count=5, metric_count=3, values_count=10):
+    def _populate_tables(self,
+                         exp_count=3,
+                         run_count=2,
+                         param_count=5,
+                         metric_count=3,
+                         values_count=10):
         self.experiments = [random_int(100, int(1e9)) for _ in range(exp_count)]
         self.exp_data = {}
         self.run_data = {}
         # Include default experiment
-        #self.experiments.append(Experiment.DEFAULT_EXPERIMENT_ID)
-        self.experiments[0] = Experiment.DEFAULT_EXPERIMENT_ID # why do we need default?
+        self.experiments[0] = Experiment.DEFAULT_EXPERIMENT_ID
         for exp in self.experiments:
             # create experiment
             exp_folder = os.path.join(self.table_prefix, str(exp))
@@ -202,7 +206,7 @@ class TestDynamodbStore(unittest.TestCase):
                 run_folder = os.path.join(exp_folder, run_uuid)
                 run_info = {"run_uuid": run_uuid,
                             "experiment_id": exp,
-                            "name": random_str(random_int(10, 40)), # reserved word?
+                            "name": random_str(random_int(10, 40)),
                             "source_type": random_int(1, 4),
                             "source_name": random_str(random_int(100, 300)),
                             "entry_point_name": random_str(random_int(100, 300)),
@@ -213,7 +217,7 @@ class TestDynamodbStore(unittest.TestCase):
                             "source_version": random_str(random_int(10, 30)),
                             "tags": [],
                             "artifact_uri": "%s/%s" % (run_folder, FileStore.ARTIFACTS_FOLDER_NAME),
-                            "lifecycle_stage": RunInfo.ACTIVE_LIFECYCLE, # do we need to write this?
+                            "lifecycle_stage": RunInfo.ACTIVE_LIFECYCLE,  # Must write for tests
                             }
                 self._write_table('run', run_info)
                 self.run_data[run_uuid] = run_info
@@ -242,13 +246,16 @@ class TestDynamodbStore(unittest.TestCase):
                         metric_value = random_int(100, 2000)
                         timestamp += random_int(10000, 2000000)
                         values.append((timestamp, metric_value))
-                        values_map.insert(0, { 'timestamp': timestamp, 'value':  metric_value })
+                        values_map.insert(0, {
+                            'timestamp': timestamp,
+                            'value':  metric_value
+                        })
                     self._write_table('run_metric', {
                         'run_uuid': run_uuid,
                         'key':  metric_name,
                         'metrics': values_map
                     })
-                    metrics[metric_name] = values # Tweak results for key/value instead of index 0/1
+                    metrics[metric_name] = values
                 self.run_data[run_uuid]["metrics"] = metrics
 
     def tearDown(self):
