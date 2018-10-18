@@ -1,5 +1,3 @@
-import os
-
 import uuid
 
 import boto3
@@ -28,7 +26,6 @@ _DYNAMODB_TABLE_PREFIX_VAR = "MLFLOW_DYNAMODB_TABLE_PREFIX"
 def _default_dynamodb_resource():
     dynamodb_endpoint_url = get_env(_DYNAMODB_ENDPOINT_URL_VAR)
     return boto3.resource('dynamodb', endpoint_url=dynamodb_endpoint_url)
-    return self.dynamodb_resource
 
 
 def _default_table_prefix():
@@ -65,14 +62,14 @@ def _dict_to_run_info(d):
 def _list_to_run_tag(l):
     return [RunTag(
         key=d['key'],
-        value=str(d.get('value', ''))
+        value=d['value']
     ) for d in l]
 
 
 def _list_to_run_param(l):
     return [Param(
         key=d['key'],
-        value=str(d.get('value', ''))
+        value=d['value']
     ) for d in l]
 
 
@@ -121,7 +118,8 @@ class DynamodbStore(AbstractStore):
     PARAMS_TABLE = "run_param"
     TAGS_TABLE = "run_tag"
 
-    def __init__(self, dynamodb_resource=None, table_prefix=None, use_gsi=False, use_projections=False):
+    def __init__(self, dynamodb_resource=None, table_prefix=None,
+                 use_gsi=False, use_projections=False):
         """
         Create a new DynamodbStore with artifact root URI.
         """

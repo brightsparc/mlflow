@@ -509,15 +509,17 @@ class TestDynamodbStore(unittest.TestCase):
         assert param.key == WEIRD_PARAM_NAME
         assert param.value == "Value"
 
-    # def test_weird_metric_names(self):
-    #     WEIRD_METRIC_NAME = "this is/a weird/but valid metric"
-    #     fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
-    #     run_uuid = self.exp_data[0]["runs"][0]
-    #     fs.log_metric(run_uuid, Metric(WEIRD_METRIC_NAME, 10, 1234))
-    #     metric = fs.get_metric(run_uuid, WEIRD_METRIC_NAME)
-    #     assert metric.key == WEIRD_METRIC_NAME
-    #     assert metric.value == 10
-    #     assert metric.timestamp == 1234
+    @pytest.mark.skip(reason="moto doesn't support list_append see:" + \
+                      "https://github.com/spulec/moto/issues/847")
+    def test_weird_metric_names(self):
+        WEIRD_METRIC_NAME = "this is/a weird/but valid metric"
+        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        run_uuid = self.exp_data[0]["runs"][0]
+        fs.log_metric(run_uuid, Metric(WEIRD_METRIC_NAME, 10, 1234))
+        metric = fs.get_metric(run_uuid, WEIRD_METRIC_NAME)
+        assert metric.key == WEIRD_METRIC_NAME
+        assert metric.value == 10
+        assert metric.timestamp == 1234
 
     def test_weird_tag_names(self):
         WEIRD_TAG_NAME = "this is/a weird/but valid tag"
