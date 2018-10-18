@@ -660,7 +660,7 @@ class DynamodbStore(AbstractStore):
             Item={
                 'run_uuid': run_uuid,
                 'key': param.key,
-                'value': str(param.value),
+                'value': param.value,
             },
             ReturnConsumedCapacity='TOTAL',
         )
@@ -678,7 +678,7 @@ class DynamodbStore(AbstractStore):
             Item={
                 'run_uuid': run_uuid,
                 'key': tag.key,
-                'value': str(tag.value),
+                'value': tag.value,
             },
             ReturnConsumedCapacity='TOTAL',
         )
