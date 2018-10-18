@@ -509,7 +509,7 @@ class TestDynamodbStore(unittest.TestCase):
         assert param.key == WEIRD_PARAM_NAME
         assert param.value == "Value"
 
-    @pytest.mark.skip(reason="moto doesn't support list_append see:" + \
+    @pytest.mark.skip(reason="moto doesn't support list_append see:" +
                       "https://github.com/spulec/moto/issues/847")
     def test_weird_metric_names(self):
         WEIRD_METRIC_NAME = "this is/a weird/but valid metric"
