@@ -63,7 +63,6 @@ class FileStore(AbstractStore):
         # Create root directory if needed
         if not exists(self.root_directory):
             mkdir(self.root_directory)
-            print("here")
             self._create_experiment_with_id(name="Default",
                                             experiment_id=Experiment.DEFAULT_EXPERIMENT_ID,
                                             artifact_uri=None)
@@ -160,7 +159,7 @@ class FileStore(AbstractStore):
         # Get all existing experiments and find the one with largest ID.
         # len(list_all(..)) would not work when experiments are deleted.
         experiments_ids = [e.experiment_id for e in self.list_experiments(ViewType.ALL)]
-        experiment_id = max(experiments_ids) + 1
+        experiment_id = max(experiments_ids) + 1 if experiments_ids else 0
         return self._create_experiment_with_id(name, experiment_id, artifact_location)
 
     def _has_experiment(self, experiment_id):

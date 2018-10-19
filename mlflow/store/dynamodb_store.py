@@ -1,3 +1,4 @@
+import os
 import uuid
 
 import boto3
@@ -23,8 +24,8 @@ _DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
 _DYNAMODB_TABLE_PREFIX_VAR = "MLFLOW_DYNAMODB_TABLE_PREFIX"
 
 
-def _default_dynamodb_resource():
-    dynamodb_endpoint_url = get_env(_DYNAMODB_ENDPOINT_URL_VAR)
+def _default_dynamodb_resource(endpoint_url=None):
+    dynamodb_endpoint_url = endpoint_url or get_env(_DYNAMODB_ENDPOINT_URL_VAR)
     return boto3.resource('dynamodb', endpoint_url=dynamodb_endpoint_url)
 
 
@@ -34,9 +35,9 @@ def _default_table_prefix():
 
 def _dict_to_experiment(d):
     return Experiment(
-        experiment_id=d['experiment_id'],
+        experiment_id=int(d['experiment_id']),
         name=d['name'],
-        artifact_location=d.get('artifact_location', ''),
+        artifact_location=d.get('artifact_location') or '',
         lifecycle_stage=d.get('lifecycle_stage', 'active')
     )
 
@@ -45,17 +46,17 @@ def _dict_to_run_info(d):
     return RunInfo(
         run_uuid=d['run_uuid'],
         experiment_id=int(d['experiment_id']),
-        name=d['name'],
+        name=d.get(d['name']) or '',
         source_type=int(d.get('source_type') or 0),
-        source_name=d.get('source_name', ''),
-        entry_point_name=d.get('entry_point_name', ''),
-        user_id=d.get('user_id', ''),
+        source_name=d.get('source_name') or '',
+        entry_point_name=d.get('entry_point_name') or '',
+        user_id=d.get('user_id') or '',
         status=int(d.get('status') or 0),
         start_time=int(d.get('start_time') or 0),
         end_time=int(d.get('end_time') or 0),
-        source_version=d.get('source_version', ''),
+        source_version=d.get('source_version') or '',
         lifecycle_stage=d.get('lifecycle_stage', 'active'),
-        artifact_uri=d.get('artifact_uri', ''),
+        artifact_uri=d.get('artifact_uri') or '',
     )
 
 
@@ -209,7 +210,7 @@ class DynamodbStore(AbstractStore):
         # Get all existing experiments and find the one with largest ID.
         # len(list_all(..)) would not work when experiments are deleted.
         experiments_ids = [e.experiment_id for e in self.list_experiments(ViewType.ALL)]
-        experiment_id = max(experiments_ids) + 1
+        experiment_id = max(experiments_ids) + 1 if experiments_ids else 0
         return self._create_experiment_with_id(name, experiment_id, artifact_location)
 
     def _get_experiment(self, experiment_id):
@@ -383,7 +384,7 @@ class DynamodbStore(AbstractStore):
             ReturnConsumedCapacity='TOTAL',
         )
         if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Attributes' in response:
-            return response['Attributes']
+            return _dict_to_run_info(response['Attributes'])
 
     def update_run_info(self, run_uuid, run_status, end_time):
         _validate_run_id(run_uuid)
@@ -418,9 +419,9 @@ class DynamodbStore(AbstractStore):
                     "%s." % experiment_id,
                     databricks_pb2.INVALID_STATE)
         run_uuid = uuid.uuid4().hex
-        artifact_uri = None  # TODO: Figure out how to handle artifact directory
+        artifact_uri = os.path.join(experiment.artifact_location, run_uuid, "artifacts")
         run_info = RunInfo(run_uuid=run_uuid, experiment_id=experiment_id,
-                           name=run_name,
+                           name=run_name or '',
                            artifact_uri=artifact_uri, source_type=source_type,
                            source_name=source_name,
                            entry_point_name=entry_point_name, user_id=user_id,

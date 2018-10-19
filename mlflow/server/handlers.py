@@ -4,6 +4,7 @@ import os
 import re
 import six
 
+from six.moves import urllib
 from functools import wraps
 from flask import Response, request, send_file
 from querystring_parser import parser
@@ -17,6 +18,7 @@ from mlflow.protos.service_pb2 import CreateExperiment, MlflowService, GetExperi
     DeleteExperiment, RestoreExperiment, RestoreRun, DeleteRun, UpdateExperiment
 from mlflow.store.artifact_repo import ArtifactRepository
 from mlflow.store.file_store import FileStore
+from mlflow.store.dynamodb_store import DynamodbStore
 from mlflow.utils.proto_json_utils import message_to_json, parse_dict
 
 
@@ -27,9 +29,13 @@ def _get_store():
     from mlflow.server import FILE_STORE_ENV_VAR, ARTIFACT_ROOT_ENV_VAR
     global _store
     if _store is None:
-        store_dir = os.environ.get(FILE_STORE_ENV_VAR, os.path.abspath("mlruns"))
-        artifact_root = os.environ.get(ARTIFACT_ROOT_ENV_VAR, store_dir)
-        _store = FileStore(store_dir, artifact_root)
+        store_uri = os.environ.get(FILE_STORE_ENV_VAR, os.path.abspath("mlruns"))
+        artifact_root = os.environ.get(ARTIFACT_ROOT_ENV_VAR, store_uri)
+        parsed = urllib.parse.urlparse(store_uri)
+        if parsed.scheme == "dynamodb":
+            _store = DynamodbStore(table_prefix=parsed.path)
+        else:
+            _store = FileStore(store_uri, artifact_root)
     return _store
 
 
@@ -343,6 +349,8 @@ def _get_artifact_repo(run):
     store = _get_store()
     if run.info.artifact_uri:
         return ArtifactRepository.from_artifact_uri(run.info.artifact_uri, store)
+    if not root_directory:
+        raise MlflowException("Store doesn't support artifcats")
 
     # TODO(aaron) Remove this once everyone locally only has runs from after
     # the introduction of "artifact_uri".
