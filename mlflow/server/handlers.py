@@ -349,8 +349,8 @@ def _get_artifact_repo(run):
     store = _get_store()
     if run.info.artifact_uri:
         return ArtifactRepository.from_artifact_uri(run.info.artifact_uri, store)
-    if not root_directory:
-        raise MlflowException("Store doesn't support artifcats")
+    if not store.root_directory:
+        raise MlflowException("Store doesn't support artifacts")
 
     # TODO(aaron) Remove this once everyone locally only has runs from after
     # the introduction of "artifact_uri".

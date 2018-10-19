@@ -46,7 +46,7 @@ def _dict_to_run_info(d):
     return RunInfo(
         run_uuid=d['run_uuid'],
         experiment_id=int(d['experiment_id']),
-        name=d.get(d['name']) or '',
+        name=d.get('name') or '',
         source_type=int(d.get('source_type') or 0),
         source_name=d.get('source_name') or '',
         entry_point_name=d.get('entry_point_name') or '',
