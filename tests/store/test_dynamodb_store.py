@@ -20,9 +20,22 @@ from tests.helper_functions import random_int, random_str
 
 
 class TestDynamodbStore(unittest.TestCase):
+    TEST_LOCALHOST = False
+
     def setUp(self):
-        self.mock = mock_dynamodb2()
-        self.mock.start()
+        # Test with localhost to test global secondary indicies / projections
+        if TestDynamodbStore.TEST_LOCALHOST:
+            self.endpoint_url='http://localhost:8000'
+            self.region_name=None
+            self.use_gsi=True
+            self.use_projections=True
+        else:
+            self.endpoint_url=None
+            self.region_name='us-west-1'
+            self.use_gsi=False
+            self.use_projections=False
+            self.mock = mock_dynamodb2()
+            self.mock.start()
         self.table_prefix = 'mlflow'
         print('creeate tables')
         self._create_tables()
@@ -31,13 +44,31 @@ class TestDynamodbStore(unittest.TestCase):
         self.maxDiff = None
 
     def tearDown(self):
-        self.mock.stop()
+        if TestDynamodbStore.TEST_LOCALHOST:
+            self._delete_tables()
+        else:
+            self.mock.stop()
 
     def _get_dynamodb_client(self):
-        return boto3.client('dynamodb', region_name='us-west-1')
+        return boto3.client('dynamodb', endpoint_url=self.endpoint_url,
+                                        region_name=self.region_name)
 
     def _get_dynamodb_resource(self):
-        return boto3.resource('dynamodb', region_name='us-west-1')
+        return boto3.resource('dynamodb', endpoint_url=self.endpoint_url,
+                                          region_name=self.region_name)
+
+    def _get_store(self):
+        return DynamodbStore(self._get_dynamodb_resource(), self.table_prefix,
+                             use_gsi=self.use_gsi,
+                             use_projections=self.use_projections)
+
+    def _delete_tables(self):
+        client = self._get_dynamodb_client()
+        for key in ['experiment', 'run', 'run_tag', 'run_param', 'run_metric']:
+            table_name = '{}_{}'.format(self.table_prefix, key)
+            response = client.delete_table(TableName=table_name)
+            print('delete table %s %d' %
+                 (table_name, response['ResponseMetadata']['HTTPStatusCode']))
 
     def _create_tables(self):
         # create a mock dynamodb client, and create tables
@@ -53,12 +84,10 @@ class TestDynamodbStore(unittest.TestCase):
                     'AttributeName': 'lifecycle_stage',
                     'AttributeType': 'S'
                 },
-
                 {
                     'AttributeName': 'name',
                     'AttributeType': 'S'
                 },
-
             ],
             TableName=table_name,
             KeySchema=[
@@ -79,10 +108,9 @@ class TestDynamodbStore(unittest.TestCase):
                             'AttributeName': 'name',
                             'KeyType': 'RANGE'
                         },
-
                     ],
                     'Projection': {
-                        'ProjectionType': 'KEYS_ONLY'
+                        'ProjectionType': 'ALL',
                     },
                     'ProvisionedThroughput': {
                         'ReadCapacityUnits': 1,
@@ -95,7 +123,8 @@ class TestDynamodbStore(unittest.TestCase):
                 'WriteCapacityUnits': 1
             },
         )
-        print('create table', table_name, response['ResponseMetadata']['HTTPStatusCode'])
+        print('create table %s %d' %
+             (table_name, response['ResponseMetadata']['HTTPStatusCode']))
         table_name = '{}_run'.format(self.table_prefix)
         response = client.create_table(
             AttributeDefinitions=[
@@ -148,7 +177,8 @@ class TestDynamodbStore(unittest.TestCase):
                 'WriteCapacityUnits': 1
             },
         )
-        print('create table', table_name, response['ResponseMetadata']['HTTPStatusCode'])
+        print('create table %s %d' %
+             (table_name, response['ResponseMetadata']['HTTPStatusCode']))
         for key in ['tag', 'param', 'metric']:
             table_name = '{}_run_{}'.format(self.table_prefix, key)
             response = client.create_table(
@@ -180,7 +210,8 @@ class TestDynamodbStore(unittest.TestCase):
                     'WriteCapacityUnits': 1
                 },
             )
-            print('create table', table_name, response['ResponseMetadata']['HTTPStatusCode'])
+            print('create table %s %d' %
+                 (table_name, response['ResponseMetadata']['HTTPStatusCode']))
 
     def _write_table(self, name, d):
         # Use mock dnamodb to put to table
@@ -188,7 +219,8 @@ class TestDynamodbStore(unittest.TestCase):
         table_name = '_'.join([self.table_prefix, name])
         table = dynamodb.Table(table_name)
         response = table.put_item(Item=d)
-        print('write table', name, response['ResponseMetadata']['HTTPStatusCode'])
+        print('write table %s %d' %
+             (name, response['ResponseMetadata']['HTTPStatusCode']))
 
     def _populate_tables(self,
                          exp_count=3,
@@ -203,7 +235,11 @@ class TestDynamodbStore(unittest.TestCase):
         for exp in self.experiments:
             # create experiment
             exp_folder = os.path.join(self.table_prefix, str(exp))
-            d = {"experiment_id": exp, "name": random_str(), "artifact_location": exp_folder}
+            d = {"experiment_id": exp,
+                 "name": random_str(),
+                 "artifact_location": exp_folder,
+                 "lifecycle_stage": RunInfo.ACTIVE_LIFECYCLE,  # Must write for tests
+                 }
             self.exp_data[exp] = d
             self._write_table('experiment', d)
             # add runs
@@ -264,7 +300,7 @@ class TestDynamodbStore(unittest.TestCase):
                 self.run_data[run_uuid]["metrics"] = metrics
 
     def test_list_experiments(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp in fs.list_experiments():
             exp_id = exp.experiment_id
             self.assertTrue(exp_id in self.experiments)
@@ -272,7 +308,7 @@ class TestDynamodbStore(unittest.TestCase):
             self.assertEqual(exp.artifact_location, self.exp_data[exp_id]["artifact_location"])
 
     def test_get_experiment_by_id(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             exp = fs.get_experiment(exp_id)
             self.assertEqual(exp.experiment_id, exp_id)
@@ -286,7 +322,7 @@ class TestDynamodbStore(unittest.TestCase):
                 fs.get_experiment(exp_id)
 
     def test_get_experiment_by_name(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             name = self.exp_data[exp_id]["name"]
             exp = fs.get_experiment_by_name(name)
@@ -301,7 +337,7 @@ class TestDynamodbStore(unittest.TestCase):
             self.assertIsNone(exp)
 
     def test_create_experiment(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
 
         # Error cases
         with self.assertRaises(Exception):
@@ -324,7 +360,7 @@ class TestDynamodbStore(unittest.TestCase):
         self.assertEqual(exp2.experiment_id, created_id)
 
     def test_create_duplicate_experiments(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             name = self.exp_data[exp_id]["name"]
             with self.assertRaises(Exception):
@@ -334,7 +370,7 @@ class TestDynamodbStore(unittest.TestCase):
         return [e.experiment_id for e in experiments]
 
     def test_delete_restore_experiment(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         exp_id = self.experiments[random_int(0, len(self.experiments) - 1)]
         exp_name = self.exp_data[exp_id]["name"]
 
@@ -342,7 +378,8 @@ class TestDynamodbStore(unittest.TestCase):
         fs.delete_experiment(exp_id)
         self.assertTrue(exp_id not in self._extract_ids(fs.list_experiments(ViewType.ACTIVE_ONLY)))
         self.assertTrue(exp_id in self._extract_ids(fs.list_experiments(ViewType.DELETED_ONLY)))
-        self.assertTrue(exp_id in self._extract_ids(fs.list_experiments(ViewType.ALL)))
+        exps = self._extract_ids(fs.list_experiments(ViewType.ALL))
+        self.assertTrue(exp_id in exps)
         self.assertEqual(fs.get_experiment(exp_id).lifecycle_stage,
                          Experiment.DELETED_LIFECYCLE)
 
@@ -361,7 +398,7 @@ class TestDynamodbStore(unittest.TestCase):
                          Experiment.ACTIVE_LIFECYCLE)
 
     def test_rename_experiment(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         exp_id = self.experiments[random_int(0, len(self.experiments) - 1)]
         exp_name = self.exp_data[exp_id]["name"]
         new_name = exp_name + "!!!"
@@ -384,7 +421,7 @@ class TestDynamodbStore(unittest.TestCase):
         self.assertEqual(fs.get_experiment(exp_id).name, exp_name)
 
     def test_delete_restore_run(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         exp_id = self.experiments[random_int(0, len(self.experiments) - 1)]
         run_id = self.exp_data[exp_id]['runs'][0]
         # Should not throw.
@@ -396,7 +433,7 @@ class TestDynamodbStore(unittest.TestCase):
         assert fs.get_run(run_id).info.lifecycle_stage == 'active'
 
     def test_create_run_in_deleted_experiment(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         exp_id = self.experiments[random_int(0, len(self.experiments) - 1)]
         # delete it
         fs.delete_experiment(exp_id)
@@ -406,7 +443,7 @@ class TestDynamodbStore(unittest.TestCase):
                           0, None, [], None)
 
     def test_get_run(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             runs = self.exp_data[exp_id]["runs"]
             for run_uuid in runs:
@@ -419,7 +456,7 @@ class TestDynamodbStore(unittest.TestCase):
                 self.assertEqual(run_info, dict(run.info))
 
     def test_list_run_infos(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             run_infos = fs.list_run_infos(exp_id, run_view_type=ViewType.ALL)
             for run_info in run_infos:
@@ -433,7 +470,7 @@ class TestDynamodbStore(unittest.TestCase):
                 self.assertEqual(dict_run_info, dict(run_info))
 
     def test_get_metric(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             runs = self.exp_data[exp_id]["runs"]
             for run_uuid in runs:
@@ -448,7 +485,7 @@ class TestDynamodbStore(unittest.TestCase):
                     self.assertEqual(metric.value, metric_value)
 
     def test_get_all_metrics(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             runs = self.exp_data[exp_id]["runs"]
             for run_uuid in runs:
@@ -462,7 +499,7 @@ class TestDynamodbStore(unittest.TestCase):
                     self.assertEqual(metric.value, metric_value)
 
     def test_get_metric_history(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             runs = self.exp_data[exp_id]["runs"]
             for run_uuid in runs:
@@ -478,7 +515,7 @@ class TestDynamodbStore(unittest.TestCase):
                         self.assertEqual(metric.value, metric_value)
 
     def test_get_param(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         for exp_id in self.experiments:
             runs = self.exp_data[exp_id]["runs"]
             for run_uuid in runs:
@@ -491,7 +528,7 @@ class TestDynamodbStore(unittest.TestCase):
 
     def test_search_runs(self):
         # replace with test with code is implemented
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         # Expect 2 runs for each experiment
         runs = fs.search_runs([self.experiments[0]], [], run_view_type=ViewType.ACTIVE_ONLY)
         assert len(runs) == 2
@@ -502,7 +539,7 @@ class TestDynamodbStore(unittest.TestCase):
 
     def test_weird_param_names(self):
         WEIRD_PARAM_NAME = "this is/a weird/but valid param"
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         run_uuid = self.exp_data[0]["runs"][0]
         fs.log_param(run_uuid, Param(WEIRD_PARAM_NAME, "Value"))
         param = fs.get_param(run_uuid, WEIRD_PARAM_NAME)
@@ -513,7 +550,7 @@ class TestDynamodbStore(unittest.TestCase):
                       "https://github.com/spulec/moto/issues/847")
     def test_weird_metric_names(self):
         WEIRD_METRIC_NAME = "this is/a weird/but valid metric"
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         run_uuid = self.exp_data[0]["runs"][0]
         fs.log_metric(run_uuid, Metric(WEIRD_METRIC_NAME, 10, 1234))
         metric = fs.get_metric(run_uuid, WEIRD_METRIC_NAME)
@@ -523,7 +560,7 @@ class TestDynamodbStore(unittest.TestCase):
 
     def test_weird_tag_names(self):
         WEIRD_TAG_NAME = "this is/a weird/but valid tag"
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         run_uuid = self.exp_data[0]["runs"][0]
         fs.set_tag(run_uuid, RunTag(WEIRD_TAG_NAME, "Muhahaha!"))
         tag = fs.get_run(run_uuid).data.tags[0]
@@ -531,7 +568,7 @@ class TestDynamodbStore(unittest.TestCase):
         assert tag.value == "Muhahaha!"
 
     def test_set_tags(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         run_uuid = self.exp_data[0]["runs"][0]
         fs.set_tag(run_uuid, RunTag("tag0", "value0"))
         fs.set_tag(run_uuid, RunTag("tag1", "value1"))
@@ -559,7 +596,7 @@ class TestDynamodbStore(unittest.TestCase):
         }
 
     def test_unicode_tag(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         run_uuid = self.exp_data[0]["runs"][0]
         value = u"𝐼 𝓈𝑜𝓁𝑒𝓂𝓃𝓁𝓎 𝓈𝓌𝑒𝒶𝓇 𝓉𝒽𝒶𝓉 𝐼 𝒶𝓂 𝓊𝓅 𝓉𝑜 𝓃𝑜 𝑔𝑜𝑜𝒹"
         fs.set_tag(run_uuid, RunTag("message", value))
@@ -571,7 +608,7 @@ class TestDynamodbStore(unittest.TestCase):
         """
         Getting metrics/tags/params/run info should be allowed on deleted runs.
         """
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         exp_id = self.experiments[random_int(0, len(self.experiments) - 1)]
         run_id = self.exp_data[exp_id]['runs'][0]
         fs.delete_run(run_id)
@@ -584,7 +621,7 @@ class TestDynamodbStore(unittest.TestCase):
         """
         Setting metrics/tags/params/updating run info should not be allowed on deleted runs.
         """
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         exp_id = self.experiments[random_int(0, len(self.experiments) - 1)]
         run_id = self.exp_data[exp_id]['runs'][0]
         fs.delete_run(run_id)
@@ -598,7 +635,7 @@ class TestDynamodbStore(unittest.TestCase):
             fs.log_param(run_id, Param('a', 'b'))
 
     def test_create_run_with_parent_id(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         exp_id = self.experiments[random_int(0, len(self.experiments) - 1)]
         source_type = 1
         run = fs.create_run(exp_id, 'user', 'name', source_type, 'source_name',
@@ -607,7 +644,7 @@ class TestDynamodbStore(unittest.TestCase):
                     for t in fs.get_all_tags(run.info.run_uuid)])
 
     def test_default_experiment_initialization(self):
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         fs.delete_experiment(Experiment.DEFAULT_EXPERIMENT_ID)
-        fs = DynamodbStore(self._get_dynamodb_resource(), self.table_prefix)
+        fs = self._get_store()
         assert fs.get_experiment(0).lifecycle_stage == Experiment.DELETED_LIFECYCLE

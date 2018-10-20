@@ -53,7 +53,7 @@ Resources:
               AttributeName: "name"
               KeyType: "RANGE"
           Projection:
-            ProjectionType: "KEYS_ONLY"
+            ProjectionType: "ALL"
           ProvisionedThroughput:
             ReadCapacityUnits: !Ref RCUParameter
             WriteCapacityUnits: !Ref WCUParameter

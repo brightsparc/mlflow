@@ -120,7 +120,7 @@ class DynamodbStore(AbstractStore):
     TAGS_TABLE = "run_tag"
 
     def __init__(self, dynamodb_resource=None, table_prefix=None,
-                 use_gsi=False, use_projections=False):
+                 use_gsi=True, use_projections=True):
         """
         Create a new DynamodbStore with artifact root URI.
         """
@@ -137,24 +137,31 @@ class DynamodbStore(AbstractStore):
         dynamodb = self._get_dynamodb_resource()
         table_name = '_'.join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
+
+        # Filter on active/deleted with optional name
         condition = None
-        if self.use_gsi and (view_type or name):
+        if self.use_gsi and view_type and view_type != ViewType.ALL:
             if view_type == ViewType.ACTIVE_ONLY:
                 condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE)
             elif view_type == ViewType.DELETED_ONLY:
                 condition = Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
-            else:  # ViewType.ALL
-                condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE) or \
-                            Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
             if name:
                 condition = And(condition, Key('name').eq(name))
             response = table.query(
                 IndexName='LifeCycleStage',
                 KeyConditionExpression=condition,
-                ReturnConsumedCapacity='INDEXES',
+                ReturnConsumedCapacity='TOTAL',
+            )
+        elif name:
+            condition = Key('name').eq(name)
+            response = table.scan(
+                FilterExpression=condition,
+                ReturnConsumedCapacity='TOTAL',
             )
         else:
-            response = table.scan()
+            response = table.scan(
+                ReturnConsumedCapacity='TOTAL',
+            )
 
         items = []
         if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
@@ -163,15 +170,22 @@ class DynamodbStore(AbstractStore):
         # Keey fetching results if there are more than the limit
         while 'LastEvaluatedKey' in response:
             print('more', response['LastEvaluatedKey'])
-            if self.use_gsi and condition:
+            if self.use_gsi and view_type and view_type != ViewType.ALL:
                 response = table.query(
                     IndexName='LifeCycleStage',
                     KeyConditionExpression=condition,
-                    ReturnConsumedCapacity='INDEXES',
+                    ReturnConsumedCapacity='TOTAL',
+                    ExclusiveStartKey=response['LastEvaluatedKey']
+                )
+            elif name:
+                response = table.scan(
+                    FilterExpression=condition,
+                    ReturnConsumedCapacity='TOTAL',
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
             else:
                 response = table.scan(
+                    ReturnConsumedCapacity='TOTAL',
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
             if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
@@ -554,23 +568,32 @@ class DynamodbStore(AbstractStore):
         dynamodb = self._get_dynamodb_resource()
         table_name = '_'.join([self.table_prefix, DynamodbStore.RUN_TABLE])
         table = dynamodb.Table(table_name)
-        if self.use_gsi:
+
+        # Filter on active/deleted with optional experiment_id
+        condition = None
+        if self.use_gsi and view_type and view_type != ViewType.ALL:
             if view_type == ViewType.ACTIVE_ONLY:
                 condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE)
             elif view_type == ViewType.DELETED_ONLY:
                 condition = Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
-            else:  # ViewType.ALL
-                condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE) or \
-                            Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
-            condition = And(condition, Key('experiment_id').eq(experiment_id))
+            if experiment_id:
+                condition = And(condition, Key('experiment_id').eq(experiment_id))
             response = table.query(
                 IndexName='LifeCycleStage',
                 KeyConditionExpression=condition,
                 ProjectionExpression='run_uuid, experiment_id, lifecycle_stage',
                 ReturnConsumedCapacity='TOTAL',
             )
+        elif experiment_id:
+            condition = Key('experiment_id').eq(experiment_id)
+            response = table.scan(
+                FilterExpression=condition,
+                ReturnConsumedCapacity='TOTAL',
+            )
         else:
-            response = table.scan()
+            response = table.scan(
+                ReturnConsumedCapacity='TOTAL',
+            )
 
         if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
             return _filter_run(response['Items'], view_type, experiment_id)

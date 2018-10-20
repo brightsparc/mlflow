@@ -179,12 +179,21 @@ def test_uri_types():
     assert not utils._is_local_uri("databricks")
     assert not utils._is_local_uri("databricks:whatever")
     assert not utils._is_local_uri("databricks://whatever")
+    assert not utils._is_databricks_uri("dynamodb")
+    assert not utils._is_databricks_uri("dynamodb:mlflow")
+    assert not utils._is_databricks_uri("dynamodb://mlflow")
 
     assert utils._is_databricks_uri("databricks")
     assert utils._is_databricks_uri("databricks:whatever")
     assert utils._is_databricks_uri("databricks://whatever")
     assert not utils._is_databricks_uri("mlruns")
     assert not utils._is_databricks_uri("http://whatever")
+
+    assert utils._is_dynamodb_uri("dynamodb")
+    assert utils._is_dynamodb_uri("dynamodb:mlflow")
+    assert utils._is_dynamodb_uri("dynamodb://mlflow")
+    assert not utils._is_dynamodb_uri("mlruns")
+    assert not utils._is_dynamodb_uri("http://whatever")
 
     assert utils._is_http_uri("http://whatever")
     assert utils._is_http_uri("https://whatever")

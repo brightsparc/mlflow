@@ -5,6 +5,7 @@ import sys
 
 from six.moves import urllib
 
+from mlflow.store.dynamodb_store import DynamodbStore
 from mlflow.store.file_store import FileStore
 from mlflow.store.rest_store import RestStore
 from mlflow.store.artifact_repo import ArtifactRepository
@@ -77,6 +78,8 @@ def _get_store(store_uri=None):
     # Pattern-match on the URI
     if _is_databricks_uri(store_uri):
         return _get_databricks_rest_store(store_uri)
+    if _is_dynamodb_uri(store_uri):
+        return _get_dynamodb_store(store_uri)
     if _is_local_uri(store_uri):
         return _get_file_store(store_uri)
     if _is_http_uri(store_uri):
@@ -101,6 +104,17 @@ def _is_databricks_uri(uri):
     """Databricks URIs look like 'databricks' (default profile) or 'databricks://profile'"""
     scheme = urllib.parse.urlparse(uri).scheme
     return scheme == 'databricks' or uri == 'databricks'
+
+
+def _is_dynamodb_uri(uri):
+    """Dynamodb URIs look like 'dynamodb' (default table) or 'dynamodb://table_prefix'"""
+    scheme = urllib.parse.urlparse(uri).scheme
+    return scheme == 'dynamodb' or uri == 'dynamodb'
+
+
+def _get_dynamodb_store(dynamodb_uri):
+    path = urllib.parse.urlparse(dynamodb_uri).path
+    return DynamodbStore(path)
 
 
 def _get_file_store(store_uri):
