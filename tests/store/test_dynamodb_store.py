@@ -25,15 +25,15 @@ class TestDynamodbStore(unittest.TestCase):
     def setUp(self):
         # Test with localhost to test global secondary indicies / projections
         if TestDynamodbStore.TEST_LOCALHOST:
-            self.endpoint_url='http://localhost:8000'
-            self.region_name=None
-            self.use_gsi=True
-            self.use_projections=True
+            self.endpoint_url = 'http://localhost:8000'
+            self.region_name = None
+            self.use_gsi = True
+            self.use_projections = True
         else:
-            self.endpoint_url=None
-            self.region_name='us-west-1'
-            self.use_gsi=False
-            self.use_projections=False
+            self.endpoint_url = None
+            self.region_name = 'us-west-1'
+            self.use_gsi = False
+            self.use_projections = False
             self.mock = mock_dynamodb2()
             self.mock.start()
         self.table_prefix = 'mlflow'
@@ -51,11 +51,11 @@ class TestDynamodbStore(unittest.TestCase):
 
     def _get_dynamodb_client(self):
         return boto3.client('dynamodb', endpoint_url=self.endpoint_url,
-                                        region_name=self.region_name)
+                            region_name=self.region_name)
 
     def _get_dynamodb_resource(self):
         return boto3.resource('dynamodb', endpoint_url=self.endpoint_url,
-                                          region_name=self.region_name)
+                              region_name=self.region_name)
 
     def _get_store(self):
         return DynamodbStore(self._get_dynamodb_resource(), self.table_prefix,
@@ -68,7 +68,7 @@ class TestDynamodbStore(unittest.TestCase):
             table_name = '{}_{}'.format(self.table_prefix, key)
             response = client.delete_table(TableName=table_name)
             print('delete table %s %d' %
-                 (table_name, response['ResponseMetadata']['HTTPStatusCode']))
+                  (table_name, response['ResponseMetadata']['HTTPStatusCode']))
 
     def _create_tables(self):
         # create a mock dynamodb client, and create tables
@@ -124,7 +124,7 @@ class TestDynamodbStore(unittest.TestCase):
             },
         )
         print('create table %s %d' %
-             (table_name, response['ResponseMetadata']['HTTPStatusCode']))
+              (table_name, response['ResponseMetadata']['HTTPStatusCode']))
         table_name = '{}_run'.format(self.table_prefix)
         response = client.create_table(
             AttributeDefinitions=[
@@ -178,7 +178,7 @@ class TestDynamodbStore(unittest.TestCase):
             },
         )
         print('create table %s %d' %
-             (table_name, response['ResponseMetadata']['HTTPStatusCode']))
+              (table_name, response['ResponseMetadata']['HTTPStatusCode']))
         for key in ['tag', 'param', 'metric']:
             table_name = '{}_run_{}'.format(self.table_prefix, key)
             response = client.create_table(
@@ -211,7 +211,7 @@ class TestDynamodbStore(unittest.TestCase):
                 },
             )
             print('create table %s %d' %
-                 (table_name, response['ResponseMetadata']['HTTPStatusCode']))
+                  (table_name, response['ResponseMetadata']['HTTPStatusCode']))
 
     def _write_table(self, name, d):
         # Use mock dnamodb to put to table
@@ -220,7 +220,7 @@ class TestDynamodbStore(unittest.TestCase):
         table = dynamodb.Table(table_name)
         response = table.put_item(Item=d)
         print('write table %s %d' %
-             (name, response['ResponseMetadata']['HTTPStatusCode']))
+              (name, response['ResponseMetadata']['HTTPStatusCode']))
 
     def _populate_tables(self,
                          exp_count=3,
