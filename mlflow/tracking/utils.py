@@ -113,8 +113,11 @@ def _is_dynamodb_uri(uri):
 
 
 def _get_dynamodb_store(dynamodb_uri):
-    path = urllib.parse.urlparse(dynamodb_uri).path
-    return DynamodbStore(path)
+    if dynamodb_uri == 'dynamodb':
+        return DynamodbStore()
+    else:
+        path = urllib.parse.urlparse(dynamodb_uri).path
+        return DynamodbStore(table_prefix=path)
 
 
 def _get_file_store(store_uri):
