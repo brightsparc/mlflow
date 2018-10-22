@@ -30,13 +30,26 @@ def _get_store():
     global _store
     if _store is None:
         store_uri = os.environ.get(FILE_STORE_ENV_VAR, os.path.abspath("mlruns"))
-        artifact_root = os.environ.get(ARTIFACT_ROOT_ENV_VAR, store_uri)
-        parsed = urllib.parse.urlparse(store_uri)
-        if parsed.scheme == "dynamodb":
-            _store = DynamodbStore(table_prefix=parsed.path)
+        if _is_dynamodb_uri(store_uri):
+            _store = _get_dynamodb_store(store_uri)
         else:
+            artifact_root = os.environ.get(ARTIFACT_ROOT_ENV_VAR, store_uri)
             _store = FileStore(store_uri, artifact_root)
     return _store
+
+
+def _is_dynamodb_uri(uri):
+    """Dynamodb URIs look like 'dynamodb' (default table) or 'dynamodb://table_prefix'"""
+    scheme = urllib.parse.urlparse(uri).scheme
+    return scheme == 'dynamodb' or uri == 'dynamodb'
+
+
+def _get_dynamodb_store(dynamodb_uri):
+    if dynamodb_uri == 'dynamodb':
+        return DynamodbStore()
+    else:
+        path = urllib.parse.urlparse(dynamodb_uri).path
+        return DynamodbStore(table_prefix=path)
 
 
 def _get_request_message(request_message, flask_request=request):

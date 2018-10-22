@@ -26,15 +26,6 @@ Resources:
         -
           AttributeName: "name"
           AttributeType: "S"
-        # -
-        #   AttributeName: "artifact_location"
-        #   AttributeType: "S"
-        # -
-        #   AttributeName: "last_update_time"
-        #   AttributeType: "N"
-        # -
-        #   AttributeName: "creation_time"
-        #   AttributeType: "N"
       KeySchema:
         -
           AttributeName: "experiment_id"
@@ -75,36 +66,6 @@ Resources:
         -
           AttributeName: "lifecycle_stage"
           AttributeType: "S"
-        # -
-        #   AttributeName: "name"
-        #   AttributeType: "S"
-        # -
-        #   AttributeName: "source_type"
-        #   AttributeType: "N"
-        # -
-        #   AttributeName: "source_name"
-        #   AttributeType: "S"
-        # -
-        #   AttributeName: "user_id"
-        #   AttributeType: "S"
-        # -
-        #   AttributeName: "status"
-        #   AttributeType: "N"
-        # -
-        #   AttributeName: "start_time"
-        #   AttributeType: "N"
-        # -
-        #   AttributeName: "end_time"
-        #   AttributeType: "N"
-        # -
-        #   AttributeName: "source_version"
-        #   AttributeType: "S"
-        # -
-        #   AttributeName: "entry_point_name"
-        #   AttributeType: "S"
-        # -
-        #   AttributeName: "artifact_uri"
-        #   AttributeType: "S"
       KeySchema:
         -
           AttributeName: "run_uuid"
@@ -171,9 +132,6 @@ Resources:
         -
           AttributeName: "key"
           AttributeType: "S"
-        # -
-        #   AttributeName: "value"
-        #   AttributeType: "S"
       KeySchema:
         -
           AttributeName: "run_uuid"
@@ -200,9 +158,6 @@ Resources:
         -
           AttributeName: "key"
           AttributeType: "S"
-        # -
-        #   AttributeName: "metrics"
-        #   AttributeType: "L"
       KeySchema:
         -
           AttributeName: "run_uuid"

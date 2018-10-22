@@ -24,9 +24,8 @@ _DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
 _DYNAMODB_TABLE_PREFIX_VAR = "MLFLOW_DYNAMODB_TABLE_PREFIX"
 
 
-def _default_dynamodb_resource(endpoint_url=None):
-    dynamodb_endpoint_url = endpoint_url or get_env(_DYNAMODB_ENDPOINT_URL_VAR)
-    return boto3.resource('dynamodb', endpoint_url=dynamodb_endpoint_url)
+def _default_endpoint_url():
+    return get_env(_DYNAMODB_ENDPOINT_URL_VAR)
 
 
 def _default_table_prefix():
@@ -74,20 +73,17 @@ def _list_to_run_param(l):
     ) for d in l]
 
 
-def _sort_metrics(l):
-    return sorted(l, key=lambda x: int(x['timestamp']))
-
-
-# Return a list of metrics with the first value (don't sort)
+# Return the first element in the list, which is the most recent if more than one.
 def _list_to_run_metric(l):
     return [Metric(key=rm['key'],
             value=float(rm['metrics'][0]['value']),
             timestamp=int(rm['metrics'][0]['timestamp'])) for rm in l]
 
 
+# Return the metrics with most recent at the end of the list
 def _dict_to_run_metric_history(rm):
     return [Metric(key=rm['key'], value=float(m['value']), timestamp=int(m['timestamp']))
-            for m in _sort_metrics(rm['metrics'])]
+            for m in rm['metrics'][::-1]]
 
 
 def _entity_to_dict(obj):
@@ -95,7 +91,7 @@ def _entity_to_dict(obj):
 
 
 def _filter_view_type(d, view_type=None):
-    return not view_type or view_type == ViewType.ALL or \
+    return view_type is None or view_type == ViewType.ALL or \
         (view_type == ViewType.ACTIVE_ONLY and
             d.get('lifecycle_stage') == RunInfo.ACTIVE_LIFECYCLE) or \
         (view_type == ViewType.DELETED_ONLY and
@@ -104,12 +100,12 @@ def _filter_view_type(d, view_type=None):
 
 def _filter_experiment(experiments, view_type=None, name=None):
     return [e for e in experiments if _filter_view_type(e, view_type)
-            and (not name or e['name'] == name)]
+            and (name is None or e['name'] == name)]
 
 
 def _filter_run(runs, view_type=None, experiment_id=None):
     return [r for r in runs if _filter_view_type(r, view_type)
-            and (not experiment_id or r['experiment_id'] == experiment_id)]
+            and (experiment_id is None or r['experiment_id'] == experiment_id)]
 
 
 class DynamodbStore(AbstractStore):
@@ -119,19 +115,184 @@ class DynamodbStore(AbstractStore):
     PARAMS_TABLE = "run_param"
     TAGS_TABLE = "run_tag"
 
-    def __init__(self, dynamodb_resource=None, table_prefix=None,
+    def __init__(self, table_prefix=None, endpoint_url=None, region_name=None,
                  use_gsi=True, use_projections=True):
         """
-        Create a new DynamodbStore with artifact root URI.
+        Create a new DynamodbStore for storing experiments and runs.
+
+        :param table_prefix: DynamoDb table prefix defaults to 'mlflow'
+        :param endpoint_url: Optional endpoint url for testing Dynamodb Local
+        :param region_name: Optional Name of the AWS region for Dynamodb
+        :param use_gsi: Flag to query Global Secondary Indices, defaults to True.
+        :param use_projections: Flag to use projections in queries, defaults to True.
         """
         super(DynamodbStore, self).__init__()
-        self.dynamodb_resource = dynamodb_resource or _default_dynamodb_resource()
         self.table_prefix = table_prefix or _default_table_prefix()
+        self.endpoint_url = endpoint_url or _default_endpoint_url()
+        self.region_name = region_name
         self.use_gsi = use_gsi
         self.use_projections = use_projections
 
+    def _get_dynamodb_client(self):
+        return boto3.client('dynamodb', endpoint_url=self.endpoint_url,
+                            region_name=self.region_name)
+
     def _get_dynamodb_resource(self):
-        return self.dynamodb_resource
+        return boto3.resource('dynamodb', endpoint_url=self.endpoint_url,
+                              region_name=self.region_name)
+
+    def create_tables(self):
+        # create a mock dynamodb client, and create tables
+        client = self._get_dynamodb_client()
+        table_name = '{}_experiment'.format(self.table_prefix)
+        response = client.create_table(
+            AttributeDefinitions=[
+                {
+                    'AttributeName': 'experiment_id',
+                    'AttributeType': 'N'
+                },
+                {
+                    'AttributeName': 'lifecycle_stage',
+                    'AttributeType': 'S'
+                },
+                {
+                    'AttributeName': 'name',
+                    'AttributeType': 'S'
+                },
+            ],
+            TableName=table_name,
+            KeySchema=[
+                {
+                    'AttributeName': 'experiment_id',
+                    'KeyType': 'HASH'
+                },
+            ],
+            GlobalSecondaryIndexes=[
+                {
+                    'IndexName': 'LifeCycleStage',
+                    'KeySchema': [
+                        {
+                            'AttributeName': 'lifecycle_stage',
+                            'KeyType': 'HASH'
+                        },
+                        {
+                            'AttributeName': 'name',
+                            'KeyType': 'RANGE'
+                        },
+                    ],
+                    'Projection': {
+                        'ProjectionType': 'ALL',
+                    },
+                    'ProvisionedThroughput': {
+                        'ReadCapacityUnits': 1,
+                        'WriteCapacityUnits': 1
+                    }
+                },
+            ],
+            ProvisionedThroughput={
+                'ReadCapacityUnits': 1,
+                'WriteCapacityUnits': 1
+            },
+        )
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("Unable to create table '%s'" % table_name)
+
+        table_name = '{}_run'.format(self.table_prefix)
+        response = client.create_table(
+            AttributeDefinitions=[
+                {
+                    'AttributeName': 'run_uuid',
+                    'AttributeType': 'S'
+                },
+                {
+                    'AttributeName': 'experiment_id',
+                    'AttributeType': 'N'
+                },
+                {
+                    'AttributeName': 'lifecycle_stage',
+                    'AttributeType': 'S'
+                },
+
+            ],
+            TableName=table_name,
+            KeySchema=[
+                {
+                    'AttributeName': 'run_uuid',
+                    'KeyType': 'HASH'
+                },
+            ],
+            GlobalSecondaryIndexes=[
+                {
+                    'IndexName': 'LifeCycleStage',
+                    'KeySchema': [
+                        {
+                            'AttributeName': 'lifecycle_stage',
+                            'KeyType': 'HASH'
+                        },
+                        {
+                            'AttributeName': 'experiment_id',
+                            'KeyType': 'RANGE'
+                        },
+
+                    ],
+                    'Projection': {
+                        'ProjectionType': 'KEYS_ONLY'
+                    },
+                    'ProvisionedThroughput': {
+                        'ReadCapacityUnits': 1,
+                        'WriteCapacityUnits': 1
+                    }
+                },
+            ],
+            ProvisionedThroughput={
+                'ReadCapacityUnits': 1,
+                'WriteCapacityUnits': 1
+            },
+        )
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("Unable to create table '%s'" % table_name)
+
+        for key in ['tag', 'param', 'metric']:
+            table_name = '{}_run_{}'.format(self.table_prefix, key)
+            response = client.create_table(
+                AttributeDefinitions=[
+                    {
+                        'AttributeName': 'run_uuid',
+                        'AttributeType': 'S'
+                    },
+                    {
+                        'AttributeName': 'key',
+                        'AttributeType': 'S'
+                    },
+
+                ],
+                TableName=table_name,
+                KeySchema=[
+                    {
+                        'AttributeName': 'run_uuid',
+                        'KeyType': 'HASH'
+                    },
+                    {
+                        'AttributeName': 'key',
+                        'KeyType': 'RANGE'
+                    },
+
+                ],
+                ProvisionedThroughput={
+                    'ReadCapacityUnits': 1,
+                    'WriteCapacityUnits': 1
+                },
+            )
+            if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+                raise MlflowException("Unable to create table '%s'" % table_name)
+
+    def delete_tables(self):
+        client = self._get_dynamodb_client()
+        for key in ['experiment', 'run', 'run_tag', 'run_param', 'run_metric']:
+            table_name = '{}_{}'.format(self.table_prefix, key)
+            response = client.delete_table(TableName=table_name)
+            if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+                raise MlflowException("Unable to delete table '%s'" % table_name)
 
     def _list_experiments(self, view_type=None, name=None):
         dynamodb = self._get_dynamodb_resource()
@@ -164,7 +325,9 @@ class DynamodbStore(AbstractStore):
             )
 
         items = []
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Items' in response:
             items += _filter_experiment(response['Items'], view_type, name)
 
         # Keey fetching results if there are more than the limit
@@ -188,7 +351,10 @@ class DynamodbStore(AbstractStore):
                     ReturnConsumedCapacity='TOTAL',
                     ExclusiveStartKey=response['LastEvaluatedKey']
                 )
-            if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
+
+            if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+                raise MlflowException("DynamoDB connection error")
+            if 'Items' in response:
                 items += _filter_experiment(response['Items'], view_type, name)
         return items
 
@@ -210,8 +376,9 @@ class DynamodbStore(AbstractStore):
             Item=_entity_to_dict(exp),
             ReturnConsumedCapacity='TOTAL',
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200:
-            return experiment_id
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return experiment_id
 
     def create_experiment(self, name, artifact_location=None):
         if name is None or name == "":
@@ -237,7 +404,9 @@ class DynamodbStore(AbstractStore):
             },
             ReturnConsumedCapacity='TOTAL',
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Item' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Item' in response:
             return response['Item']
 
     def get_experiment(self, experiment_id):
@@ -247,11 +416,11 @@ class DynamodbStore(AbstractStore):
         :param experiment_id: Integer id for the experiment
         :return: A single Experiment object if it exists, otherwise raises an Exception.
         """
-        try:
-            return _dict_to_experiment(self._get_experiment(experiment_id))
-        except Exception:
+        exp = self._get_experiment(experiment_id)
+        if exp is None:
             raise MlflowException("Could not find experiment with ID %s" % experiment_id,
                                   databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+        return _dict_to_experiment(exp)
 
     def get_experiment_by_name(self, name):
         exps = self._list_experiments(name=name)
@@ -278,7 +447,9 @@ class DynamodbStore(AbstractStore):
             ReturnValues="UPDATED_NEW",
             ReturnConsumedCapacity='TOTAL',
         )
-        return response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Attributes' in response
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return 'Attributes' in response
 
     def delete_experiment(self, experiment_id):
         experiment = self.get_experiment(experiment_id)
@@ -315,7 +486,9 @@ class DynamodbStore(AbstractStore):
             ReturnConsumedCapacity='TOTAL',
         )
 
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Attributes' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Attributes' in response:
             return response['Attributes']
 
     def rename_experiment(self, experiment_id, new_name):
@@ -335,7 +508,9 @@ class DynamodbStore(AbstractStore):
             },
             ReturnConsumedCapacity='TOTAL',
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Item' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Item' in response:
             return _dict_to_run_info(response['Item'])
         raise MlflowException("Run '%s' not found" % run_uuid,
                               databricks_pb2.RESOURCE_DOES_NOT_EXIST)
@@ -357,7 +532,9 @@ class DynamodbStore(AbstractStore):
             ReturnValues="UPDATED_NEW",
             ReturnConsumedCapacity='TOTAL',
         )
-        return response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Attributes' in response
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return 'Attributes' in response
 
     def delete_run(self, run_id):
         _validate_run_id(run_id)
@@ -397,7 +574,9 @@ class DynamodbStore(AbstractStore):
             ReturnValues="ALL_NEW",
             ReturnConsumedCapacity='TOTAL',
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Attributes' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Attributes' in response:
             return _dict_to_run_info(response['Attributes'])
 
     def update_run_info(self, run_uuid, run_status, end_time):
@@ -414,7 +593,9 @@ class DynamodbStore(AbstractStore):
             Item=run_info_dict,
             ReturnConsumedCapacity='TOTAL',
         )
-        return response['ResponseMetadata']['HTTPStatusCode'] == 200
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return True
 
     def create_run(self, experiment_id, user_id, run_name, source_type,
                    source_name, entry_point_name, start_time, source_version, tags, parent_run_id):
@@ -488,7 +669,9 @@ class DynamodbStore(AbstractStore):
                 KeyConditionExpression=condition,
                 ReturnConsumedCapacity='TOTAL',
             )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Items' in response:
             return response['Items']
         return []
 
@@ -518,7 +701,9 @@ class DynamodbStore(AbstractStore):
             },
             ReturnConsumedCapacity='TOTAL',
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Item' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Item' in response:
             return _dict_to_run_metric_history(response['Item'])
 
     def _get_run_params(self, run_uuid, param_name=None):
@@ -533,7 +718,9 @@ class DynamodbStore(AbstractStore):
             KeyConditionExpression=condition,
             ReturnConsumedCapacity='TOTAL',
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Items' in response:
             return response['Items']
         return []
 
@@ -560,7 +747,9 @@ class DynamodbStore(AbstractStore):
             KeyConditionExpression=Key('run_uuid').eq(run_uuid),
             ReturnConsumedCapacity='TOTAL',
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Items' in response:
             return _list_to_run_tag(response['Items'])
         return []
 
@@ -595,7 +784,9 @@ class DynamodbStore(AbstractStore):
                 ReturnConsumedCapacity='TOTAL',
             )
 
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Items' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Items' in response:
             return _filter_run(response['Items'], view_type, experiment_id)
         return []
 
@@ -617,7 +808,9 @@ class DynamodbStore(AbstractStore):
             },
             ReturnConsumedCapacity='TOTAL'
         )
-        if response['ResponseMetadata']['HTTPStatusCode'] == 200 and 'Responses' in response:
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        if 'Responses' in response:
             return response['Responses'][table_name]
         return []
 
@@ -647,7 +840,7 @@ class DynamodbStore(AbstractStore):
         dynamodb = self._get_dynamodb_resource()
         table_name = '_'.join([self.table_prefix, DynamodbStore.METRICS_TABLE])
         table = dynamodb.Table(table_name)
-        # NOTE: list_append is not supported with mock
+        # Append metrics to head of list, so the first element is most recent
         response = table.update_item(
             Key={
                 'run_uuid': run_uuid,
@@ -668,7 +861,9 @@ class DynamodbStore(AbstractStore):
             ReturnValues="NONE",
             ReturnConsumedCapacity='TOTAL',
         )
-        return response['ResponseMetadata']['HTTPStatusCode'] == 200
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return True
 
     def log_param(self, run_uuid, param):
         _validate_run_id(run_uuid)
@@ -686,7 +881,9 @@ class DynamodbStore(AbstractStore):
             },
             ReturnConsumedCapacity='TOTAL',
         )
-        return response['ResponseMetadata']['HTTPStatusCode'] == 200
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return True
 
     def set_tag(self, run_uuid, tag):
         _validate_run_id(run_uuid)
@@ -704,4 +901,6 @@ class DynamodbStore(AbstractStore):
             },
             ReturnConsumedCapacity='TOTAL',
         )
-        return response['ResponseMetadata']['HTTPStatusCode'] == 200
+        if response['ResponseMetadata']['HTTPStatusCode'] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return True

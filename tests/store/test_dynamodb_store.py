@@ -8,7 +8,6 @@ import time
 
 import pytest
 
-import boto3
 from moto.dynamodb2 import mock_dynamodb2
 
 from mlflow.entities import Experiment, Metric, Param, RunTag, ViewType, RunInfo
@@ -34,188 +33,38 @@ class TestDynamodbStore(unittest.TestCase):
             self.region_name = 'us-west-1'
             self.use_gsi = False
             self.use_projections = False
+            # Create a mock dynamodb table in bucket in moto
+            # Note that we must set these as environment variables in case users
+            # so that boto does not attempt to assume credentials from the ~/.aws/config
+            # or IAM role. moto does not correctly pass the arguments to boto3.client().
+            os.environ["AWS_ACCESS_KEY_ID"] = "a"
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "b"
             self.mock = mock_dynamodb2()
             self.mock.start()
+
         self.table_prefix = 'mlflow'
-        print('creeate tables')
-        self._create_tables()
+        self.store = DynamodbStore(table_prefix=self.table_prefix,
+                                   endpoint_url=self.endpoint_url,
+                                   region_name=self.region_name,
+                                   use_gsi=self.use_gsi,
+                                   use_projections=self.use_projections)
+        print('create tables')
+        self.store.create_tables()
         print('populate tables')
         self._populate_tables()
         self.maxDiff = None
 
     def tearDown(self):
         if TestDynamodbStore.TEST_LOCALHOST:
-            self._delete_tables()
+            self.store.delete_tables()
         else:
             self.mock.stop()
 
-    def _get_dynamodb_client(self):
-        return boto3.client('dynamodb', endpoint_url=self.endpoint_url,
-                            region_name=self.region_name)
-
-    def _get_dynamodb_resource(self):
-        return boto3.resource('dynamodb', endpoint_url=self.endpoint_url,
-                              region_name=self.region_name)
-
     def _get_store(self):
-        return DynamodbStore(self._get_dynamodb_resource(), self.table_prefix,
-                             use_gsi=self.use_gsi,
-                             use_projections=self.use_projections)
-
-    def _delete_tables(self):
-        client = self._get_dynamodb_client()
-        for key in ['experiment', 'run', 'run_tag', 'run_param', 'run_metric']:
-            table_name = '{}_{}'.format(self.table_prefix, key)
-            response = client.delete_table(TableName=table_name)
-            print('delete table %s %d' %
-                  (table_name, response['ResponseMetadata']['HTTPStatusCode']))
-
-    def _create_tables(self):
-        # create a mock dynamodb client, and create tables
-        client = self._get_dynamodb_client()
-        table_name = '{}_experiment'.format(self.table_prefix)
-        response = client.create_table(
-            AttributeDefinitions=[
-                {
-                    'AttributeName': 'experiment_id',
-                    'AttributeType': 'N'
-                },
-                {
-                    'AttributeName': 'lifecycle_stage',
-                    'AttributeType': 'S'
-                },
-                {
-                    'AttributeName': 'name',
-                    'AttributeType': 'S'
-                },
-            ],
-            TableName=table_name,
-            KeySchema=[
-                {
-                    'AttributeName': 'experiment_id',
-                    'KeyType': 'HASH'
-                },
-            ],
-            GlobalSecondaryIndexes=[
-                {
-                    'IndexName': 'LifeCycleStage',
-                    'KeySchema': [
-                        {
-                            'AttributeName': 'lifecycle_stage',
-                            'KeyType': 'HASH'
-                        },
-                        {
-                            'AttributeName': 'name',
-                            'KeyType': 'RANGE'
-                        },
-                    ],
-                    'Projection': {
-                        'ProjectionType': 'ALL',
-                    },
-                    'ProvisionedThroughput': {
-                        'ReadCapacityUnits': 1,
-                        'WriteCapacityUnits': 1
-                    }
-                },
-            ],
-            ProvisionedThroughput={
-                'ReadCapacityUnits': 1,
-                'WriteCapacityUnits': 1
-            },
-        )
-        print('create table %s %d' %
-              (table_name, response['ResponseMetadata']['HTTPStatusCode']))
-        table_name = '{}_run'.format(self.table_prefix)
-        response = client.create_table(
-            AttributeDefinitions=[
-                {
-                    'AttributeName': 'run_uuid',
-                    'AttributeType': 'S'
-                },
-                {
-                    'AttributeName': 'experiment_id',
-                    'AttributeType': 'N'
-                },
-                {
-                    'AttributeName': 'lifecycle_stage',
-                    'AttributeType': 'S'
-                },
-
-            ],
-            TableName=table_name,
-            KeySchema=[
-                {
-                    'AttributeName': 'run_uuid',
-                    'KeyType': 'HASH'
-                },
-            ],
-            GlobalSecondaryIndexes=[
-                {
-                    'IndexName': 'LifeCycleStage',
-                    'KeySchema': [
-                        {
-                            'AttributeName': 'lifecycle_stage',
-                            'KeyType': 'HASH'
-                        },
-                        {
-                            'AttributeName': 'experiment_id',
-                            'KeyType': 'RANGE'
-                        },
-
-                    ],
-                    'Projection': {
-                        'ProjectionType': 'KEYS_ONLY'
-                    },
-                    'ProvisionedThroughput': {
-                        'ReadCapacityUnits': 1,
-                        'WriteCapacityUnits': 1
-                    }
-                },
-            ],
-            ProvisionedThroughput={
-                'ReadCapacityUnits': 1,
-                'WriteCapacityUnits': 1
-            },
-        )
-        print('create table %s %d' %
-              (table_name, response['ResponseMetadata']['HTTPStatusCode']))
-        for key in ['tag', 'param', 'metric']:
-            table_name = '{}_run_{}'.format(self.table_prefix, key)
-            response = client.create_table(
-                AttributeDefinitions=[
-                    {
-                        'AttributeName': 'run_uuid',
-                        'AttributeType': 'S'
-                    },
-                    {
-                        'AttributeName': 'key',
-                        'AttributeType': 'S'
-                    },
-
-                ],
-                TableName=table_name,
-                KeySchema=[
-                    {
-                        'AttributeName': 'run_uuid',
-                        'KeyType': 'HASH'
-                    },
-                    {
-                        'AttributeName': 'key',
-                        'KeyType': 'RANGE'
-                    },
-
-                ],
-                ProvisionedThroughput={
-                    'ReadCapacityUnits': 1,
-                    'WriteCapacityUnits': 1
-                },
-            )
-            print('create table %s %d' %
-                  (table_name, response['ResponseMetadata']['HTTPStatusCode']))
+        return self.store
 
     def _write_table(self, name, d):
-        # Use mock dnamodb to put to table
-        dynamodb = self._get_dynamodb_resource()
+        dynamodb = self._get_store()._get_dynamodb_resource()
         table_name = '_'.join([self.table_prefix, name])
         table = dynamodb.Table(table_name)
         response = table.put_item(Item=d)
@@ -283,9 +132,9 @@ class TestDynamodbStore(unittest.TestCase):
                     metric_name = random_str(random_int(6, 10))
                     timestamp = int(time.time())
                     values, values_map = [], []
-                    for _ in range(values_count):
-                        metric_value = random_int(100, 2000)
-                        timestamp += random_int(10000, 2000000)
+                    for i in range(values_count):
+                        metric_value = random_int(i*100, (i*1)*100)
+                        timestamp += random_int(i*1000, (i+1)*1000)
                         values.append((timestamp, metric_value))
                         values_map.insert(0, {
                             'timestamp': timestamp,
