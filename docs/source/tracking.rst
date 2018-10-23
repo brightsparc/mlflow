@@ -59,9 +59,9 @@ Where Runs Are Recorded
 
 MLflow runs are recorded either locally in files or remotely to a tracking server.
 By default, the MLflow Python API logs runs locally to files in an ``mlruns`` directory wherever you
-ran your program. You can then run ``mlflow ui`` to see the logged runs. 
+ran your program. You can then run ``mlflow ui`` to see the logged runs.
 
-To log runs remotely, set the ``MLFLOW_TRACKING_URI`` environment variable to a tracking server's URI or 
+To log runs remotely, set the ``MLFLOW_TRACKING_URI`` environment variable to a tracking server's URI or
 call :py:func:`mlflow.set_tracking_uri`.
 
 There are different kinds of remote tracking URIs:
@@ -69,6 +69,7 @@ There are different kinds of remote tracking URIs:
 - Local file path (specified as ``file:/my/local/dir``), where data is just directly stored locally.
 - HTTP server (specified as ``https://my-server:5000``), which is a server hosting an :ref:`MLFlow tracking server <tracking_server>`.
 - Databricks workspace (specified as ``databricks`` or as ``databricks://<profileName>``, a `Databricks CLI profile <https://github.com/databricks/databricks-cli#installation>`_. This works only in workspaces for which the Databricks MLflow Tracking Server is enabled; contact Databricks if interested.
+- DynamoDB database (specified as ``dynamodb`` or as ``dynamodb://<table_prefix>``), where data is stored against in a series of dynamoDB tables, where `table_prefix` defaults to "mlflow".
 
 Logging Data to Runs
 ====================
@@ -171,7 +172,7 @@ Managing Experiments and Runs with the Tracking Service API
 
 MLflow provides a more detailed Tracking Service API for managing experiments and runs directly,
 which is available through client SDK in the :py:mod:`mlflow.tracking` module.
-This makes it possible to query data about past runs, log additional information about them, create experiments, 
+This makes it possible to query data about past runs, log additional information about them, create experiments,
 add tags to a run, and more.
 
 .. rubric:: Example
@@ -195,7 +196,7 @@ The :py:func:`mlflow.tracking.MlflowClient.set_tag` function lets you add custom
 .. code:: python
 
   client.set_tag(run.info.run_uuid, "tag_key", "tag_value")
-  
+
 .. important:: Do not use the prefix ``mlflow`` for a tag.  This prefix is reserved for use by MLflow.
 
 
@@ -221,7 +222,7 @@ Querying Runs Programmatically
 
 All of the functions in the Tracking UI can be accessed programmatically. This makes it easy to do several common tasks:
 
-* Query and compare runs using any data analysis tool of your choice, for example, **pandas**. 
+* Query and compare runs using any data analysis tool of your choice, for example, **pandas**.
 * Determine the artifact URI for a run to feed some of its artifacts into a new run when executing a workflow. For an example of querying runs and constructing a multistep workflow, see the MLflow `Multistep Workflow Example project <https://github.com/mlflow/mlflow/blob/15cc05ce2217b7c7af4133977b07542934a9a19f/examples/multistep_workflow/main.py#L63>`_.
 * Load artifacts from past runs as :ref:`models`. For an example of training, exporting, and loading a model, and predicting using the model, see the MLFlow `TensorFlow example <https://github.com/mlflow/mlflow/tree/master/examples/tensorflow>`_.
 * Run automated parameter search algorithms, where you query the metrics from various runs to submit new ones. For an example of running automated parameter search algorithms, see the MLflow `Hyperparameter Tuning Example project <https://github.com/mlflow/mlflow/blob/master/examples/hyperparam/README.rst>`_.
@@ -238,6 +239,23 @@ MLflow Tracking Servers
 
 You run an MLflow tracking server using ``mlflow server``.  An example configuration for a server is:
 
+Storage
+-------
+
+An MLflow tracking server has two properties related to how data is stored: file store and artifact store.
+
+File Stores
+~~~~~~~~~~~~
+
+Files stores can write run and experiment metadata to either write to the file system or Amazon DynamoDB tables.
+
+File System
+^^^^^^^^^^^
+
+The *file store* (exposed as ``--file-store``) is where the *server* stores run and experiment metadata.
+It defaults to the local ``./mlruns`` directory (the same as when running ``mlflow run`` locally), but when
+running a server, make sure that this points to a persistent (that is, non-ephemeral) file system location.
+
 .. code:: bash
 
     mlflow server \
@@ -245,14 +263,22 @@ You run an MLflow tracking server using ``mlflow server``.  An example configura
         --default-artifact-root s3://my-mlflow-bucket/ \
         --host 0.0.0.0
 
-Storage
--------
+Amazon DynamoDB
+^^^^^^^^^^^^^^^
 
-An MLflow tracking server has two properties related to how data is stored: file store and artifact store.
+The *file store* can be set to use DynamoDB to store run and experiment metadata in DynamoDB tables.
+Configure this by specifying *file store* as `dynamodb` and optionally providing a table prefix which
+defaults to "mlflow", for example `--file-store dynamodb://mlflow`.
 
-The *file store* (exposed as ``--file-store``) is where the *server* stores run and experiment metadata.
-It defaults to the local ``./mlruns`` directory (the same as when running ``mlflow run`` locally), but when
-running a server, make sure that this points to a persistent (that is, non-ephemeral) file system location.
+.. code:: bash
+
+    mlflow server \
+        --file-store dynamodb://mlflow \
+        --default-artifact-root s3://my-mlflow-bucket/ \
+        --host 0.0.0.0
+
+Artifact Stores
+~~~~~~~~~~~~~~~
 
 The *artifact store* is a location suitable for large data (such as an S3 bucket or shared NFS file system)
 and is where *clients* log their artifact output (for example, models). The artifact store is a property
@@ -273,8 +299,6 @@ See `Set up AWS Credentials and Region for Development <https://docs.aws.amazon.
   is a path inside the file store. Typically this is not an appropriate location, as the client and
   server will probably be referring to different physical locations (that is, the same path on different disks).
 
-Supported Artifact Stores
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In addition to local file paths, MLflow supports the following storage systems as artifact stores: Amazon S3, Azure Blob Storage, Google Cloud Storage, SFTP server, and NFS.
 
@@ -345,10 +369,10 @@ points to a persistent (non-ephemeral) disk.
 Logging to a Tracking Server
 ----------------------------
 
-To log to a tracking server, set the ``MLFLOW_TRACKING_URI`` environment variable to the server's URI, 
-along with its scheme and port (for example, ``http://10.0.0.1:5000``) or call :py:func:`mlflow.set_tracking_uri`. 
+To log to a tracking server, set the ``MLFLOW_TRACKING_URI`` environment variable to the server's URI,
+along with its scheme and port (for example, ``http://10.0.0.1:5000``) or call :py:func:`mlflow.set_tracking_uri`.
 
-The :py:func:`mlflow.start_run`, :py:func:`mlflow.log_param`, and :py:func:`mlflow.log_metric` calls 
+The :py:func:`mlflow.start_run`, :py:func:`mlflow.log_param`, and :py:func:`mlflow.log_metric` calls
 then make API requests to your remote tracking server.
 
 .. code:: python
