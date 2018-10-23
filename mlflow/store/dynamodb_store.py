@@ -141,7 +141,7 @@ class DynamodbStore(AbstractStore):
         return boto3.resource('dynamodb', endpoint_url=self.endpoint_url,
                               region_name=self.region_name)
 
-    def create_tables(self):
+    def create_tables(self, rcu=1, wcu=1):
         # create a mock dynamodb client, and create tables
         client = self._get_dynamodb_client()
         table_name = '{}_experiment'.format(self.table_prefix)
@@ -184,14 +184,14 @@ class DynamodbStore(AbstractStore):
                         'ProjectionType': 'ALL',
                     },
                     'ProvisionedThroughput': {
-                        'ReadCapacityUnits': 1,
-                        'WriteCapacityUnits': 1
+                        'ReadCapacityUnits': rcu,
+                        'WriteCapacityUnits': wcu
                     }
                 },
             ],
             ProvisionedThroughput={
-                'ReadCapacityUnits': 1,
-                'WriteCapacityUnits': 1
+                'ReadCapacityUnits': rcu,
+                'WriteCapacityUnits': wcu
             },
         )
         if response['ResponseMetadata']['HTTPStatusCode'] != 200:
@@ -239,14 +239,14 @@ class DynamodbStore(AbstractStore):
                         'ProjectionType': 'KEYS_ONLY'
                     },
                     'ProvisionedThroughput': {
-                        'ReadCapacityUnits': 1,
-                        'WriteCapacityUnits': 1
+                        'ReadCapacityUnits': rcu,
+                        'WriteCapacityUnits': wcu
                     }
                 },
             ],
             ProvisionedThroughput={
-                'ReadCapacityUnits': 1,
-                'WriteCapacityUnits': 1
+                'ReadCapacityUnits': rcu,
+                'WriteCapacityUnits': wcu
             },
         )
         if response['ResponseMetadata']['HTTPStatusCode'] != 200:
@@ -279,8 +279,8 @@ class DynamodbStore(AbstractStore):
 
                 ],
                 ProvisionedThroughput={
-                    'ReadCapacityUnits': 1,
-                    'WriteCapacityUnits': 1
+                    'ReadCapacityUnits': rcu,
+                    'WriteCapacityUnits': wcu
                 },
             )
             if response['ResponseMetadata']['HTTPStatusCode'] != 200:
