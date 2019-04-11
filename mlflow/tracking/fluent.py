@@ -5,29 +5,32 @@ MLflow run. This module is exposed to users at the top-level :py:mod:`mlflow` mo
 
 from __future__ import print_function
 
-import numbers
 import os
 
 import atexit
-import sys
 import time
+import logging
 
-from mlflow.entities import Experiment, Run, SourceType, RunInfo
+import mlflow.tracking.utils
+from mlflow.entities import Experiment, Run, SourceType, RunStatus, Param, RunTag, Metric
+from mlflow.entities.lifecycle_stage import LifecycleStage
 from mlflow.exceptions import MlflowException
 from mlflow.tracking.client import MlflowClient
+from mlflow.tracking import context
 from mlflow.utils import env
-from mlflow.utils.databricks_utils import is_in_databricks_notebook, get_notebook_id, \
-    get_notebook_path, get_webapp_url
-from mlflow.utils.logging_utils import eprint
-from mlflow.utils.mlflow_tags import MLFLOW_DATABRICKS_WEBAPP_URL, \
-    MLFLOW_DATABRICKS_NOTEBOOK_PATH, \
-    MLFLOW_DATABRICKS_NOTEBOOK_ID
+from mlflow.utils.databricks_utils import is_in_databricks_notebook, get_notebook_id
+from mlflow.utils.mlflow_tags import MLFLOW_GIT_COMMIT, MLFLOW_SOURCE_TYPE, MLFLOW_SOURCE_NAME, \
+    MLFLOW_PROJECT_ENTRY_POINT, MLFLOW_PARENT_RUN_ID
 from mlflow.utils.validation import _validate_run_id
 
 _EXPERIMENT_ID_ENV_VAR = "MLFLOW_EXPERIMENT_ID"
+_EXPERIMENT_NAME_ENV_VAR = "MLFLOW_EXPERIMENT_NAME"
 _RUN_ID_ENV_VAR = "MLFLOW_RUN_ID"
 _active_run_stack = []
 _active_experiment_id = None
+
+
+_logger = logging.getLogger(__name__)
 
 
 def set_experiment(experiment_name):
@@ -40,9 +43,14 @@ def set_experiment(experiment_name):
     client = MlflowClient()
     experiment = client.get_experiment_by_name(experiment_name)
     exp_id = experiment.experiment_id if experiment else None
-    if not exp_id:
+    if exp_id is None:  # id can be 0
         print("INFO: '{}' does not exist. Creating a new experiment".format(experiment_name))
         exp_id = client.create_experiment(experiment_name)
+    elif experiment.lifecycle_stage == LifecycleStage.DELETED:
+        raise MlflowException(
+            "Cannot set a deleted experiment '%s' as the active experiment."
+            " You can restore the experiment, or permanently delete the "
+            " experiment to create a new one." % experiment.name)
     global _active_experiment_id
     _active_experiment_id = exp_id
 
@@ -57,8 +65,8 @@ class ActiveRun(Run):  # pylint: disable=W0223
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        status = "FINISHED" if exc_type is None else "FAILED"
-        end_run(status)
+        status = RunStatus.FINISHED if exc_type is None else RunStatus.FAILED
+        end_run(RunStatus.to_string(status))
         return exc_type is None
 
 
@@ -103,7 +111,7 @@ def start_run(run_uuid=None, experiment_id=None, source_name=None, source_versio
     if existing_run_uuid:
         _validate_run_id(existing_run_uuid)
         active_run_obj = MlflowClient().get_run(existing_run_uuid)
-        if active_run_obj.info.lifecycle_stage == RunInfo.DELETED_LIFECYCLE:
+        if active_run_obj.info.lifecycle_stage == LifecycleStage.DELETED:
             raise MlflowException("Cannot start run with ID {} because it is in the "
                                   "deleted state.".format(existing_run_uuid))
     else:
@@ -112,41 +120,33 @@ def start_run(run_uuid=None, experiment_id=None, source_name=None, source_versio
         else:
             parent_run_id = None
 
-        exp_id_for_run = experiment_id or _get_experiment_id()
-        if is_in_databricks_notebook():
-            databricks_tags = {}
-            notebook_id = get_notebook_id()
-            notebook_path = get_notebook_path()
-            webapp_url = get_webapp_url()
-            if notebook_id is not None:
-                databricks_tags[MLFLOW_DATABRICKS_NOTEBOOK_ID] = notebook_id
-            if notebook_path is not None:
-                databricks_tags[MLFLOW_DATABRICKS_NOTEBOOK_PATH] = notebook_path
-            if webapp_url is not None:
-                databricks_tags[MLFLOW_DATABRICKS_WEBAPP_URL] = webapp_url
-            active_run_obj = MlflowClient().create_run(
-                experiment_id=exp_id_for_run,
-                run_name=run_name,
-                source_name=notebook_path,
-                source_version=source_version or _get_source_version(),
-                entry_point_name=entry_point_name,
-                source_type=SourceType.NOTEBOOK,
-                tags=databricks_tags,
-                parent_run_id=parent_run_id)
-        else:
-            active_run_obj = MlflowClient().create_run(
-                experiment_id=exp_id_for_run,
-                run_name=run_name,
-                source_name=source_name or _get_source_name(),
-                source_version=source_version or _get_source_version(),
-                entry_point_name=entry_point_name,
-                source_type=source_type or _get_source_type(),
-                parent_run_id=parent_run_id)
+        exp_id_for_run = experiment_id if experiment_id is not None else _get_experiment_id()
+
+        user_specified_tags = {}
+        if parent_run_id is not None:
+            user_specified_tags[MLFLOW_PARENT_RUN_ID] = parent_run_id
+        if source_name is not None:
+            user_specified_tags[MLFLOW_SOURCE_NAME] = source_name
+        if source_type is not None:
+            user_specified_tags[MLFLOW_SOURCE_TYPE] = SourceType.to_string(source_type)
+        if source_version is not None:
+            user_specified_tags[MLFLOW_GIT_COMMIT] = source_version
+        if entry_point_name is not None:
+            user_specified_tags[MLFLOW_PROJECT_ENTRY_POINT] = entry_point_name
+
+        tags = context.resolve_tags(user_specified_tags)
+
+        active_run_obj = MlflowClient().create_run(
+            experiment_id=exp_id_for_run,
+            run_name=run_name,
+            tags=tags
+        )
+
     _active_run_stack.append(ActiveRun(active_run_obj))
     return _active_run_stack[-1]
 
 
-def end_run(status="FINISHED"):
+def end_run(status=RunStatus.to_string(RunStatus.FINISHED)):
     """End an active MLflow run (if there is one)."""
     global _active_run_stack
     if len(_active_run_stack) > 0:
@@ -193,12 +193,44 @@ def log_metric(key, value):
     :param key: Metric name (string).
     :param value: Metric value (float).
     """
-    if not isinstance(value, numbers.Number):
-        eprint("WARNING: The metric {}={} was not logged because the value is not a number.".format(
-            key, value))
-        return
     run_id = _get_or_start_run().info.run_uuid
     MlflowClient().log_metric(run_id, key, value, int(time.time()))
+
+
+def log_metrics(metrics):
+    """
+    Log multiple metrics for the current run, starting a run if no runs are active.
+    :param metrics: Dictionary of metric_name: String -> value: Float
+    :returns: None
+    """
+    run_id = _get_or_start_run().info.run_uuid
+    timestamp = int(time.time())
+    metrics_arr = [Metric(key, value, timestamp) for key, value in metrics.items()]
+    MlflowClient().log_batch(run_id=run_id, metrics=metrics_arr, params=[], tags=[])
+
+
+def log_params(params):
+    """
+    Log a batch of params for the current run, starting a run if no runs are active.
+    :param params: Dictionary of param_name: String -> value: (String, but will be string-ified if
+                   not)
+    :returns: None
+    """
+    run_id = _get_or_start_run().info.run_uuid
+    params_arr = [Param(key, value) for key, value in params.items()]
+    MlflowClient().log_batch(run_id=run_id, metrics=[], params=params_arr, tags=[])
+
+
+def set_tags(tags):
+    """
+    Log a batch of tags for the current run, starting a run if no runs are active.
+    :param tags: Dictionary of tag_name: String -> value: (String, but will be string-ified if
+                 not)
+    :returns: None
+    """
+    run_id = _get_or_start_run().info.run_uuid
+    tags_arr = [RunTag(key, value) for key, value in tags.items()]
+    MlflowClient().log_batch(run_id=run_id, metrics=[], params=[], tags=tags_arr)
 
 
 def log_artifact(local_path, artifact_path=None):
@@ -235,12 +267,25 @@ def create_experiment(name, artifact_location=None):
     return MlflowClient().create_experiment(name, artifact_location)
 
 
-def get_artifact_uri():
+def get_artifact_uri(artifact_path=None):
     """
-    Get the artifact URI of the currently active run. Calls to ``log_artifact`` and
-    ``log_artifacts`` write artifact(s) to subdirectories of the returned URI.
+    Get the absolute URI of the specified artifact in the currently active run.
+    If `path` is not specified, the artifact root URI of the currently active
+    run will be returned; calls to ``log_artifact`` and ``log_artifacts`` write
+    artifact(s) to subdirectories of the artifact root URI.
+
+    :param artifact_path: The run-relative artifact path for which to obtain an absolute URI.
+                          For example, "path/to/artifact". If unspecified, the artifact root URI
+                          for the currently active run will be returned.
+    :return: An *absolute* URI referring to the specified artifact or the currently adtive run's
+             artifact root. For example, if an artifact path is provided and the currently active
+             run uses an S3-backed store, this may be a uri of the form
+             ``s3://<bucket_name>/path/to/artifact/root/path/to/artifact``. If an artifact path
+             is not provided and the currently active run uses an S3-backed store, this may be a
+             URI of the form ``s3://<bucket_name>/path/to/artifact/root``.
     """
-    return _get_or_start_run().info.artifact_uri
+    return mlflow.tracking.utils.get_artifact_uri(
+        run_id=_get_or_start_run().info.run_uuid, artifact_path=artifact_path)
 
 
 def _get_or_start_run():
@@ -249,48 +294,16 @@ def _get_or_start_run():
     return start_run()
 
 
-def _get_main_file():
-    if len(sys.argv) > 0:
-        return sys.argv[0]
-    return None
-
-
-def _get_source_name():
-    main_file = _get_main_file()
-    if main_file is not None:
-        return main_file
-    return "<console>"
-
-
-def _get_source_version():
-    main_file = _get_main_file()
-    if main_file is not None:
-        return _get_git_commit(main_file)
-    return None
-
-
-def _get_source_type():
-    return SourceType.LOCAL
+def _get_experiment_id_from_env():
+    experiment_name = env.get_env(_EXPERIMENT_NAME_ENV_VAR)
+    if experiment_name is not None:
+        exp = MlflowClient().get_experiment_by_name(experiment_name)
+        return exp.experiment_id if exp else None
+    return env.get_env(_EXPERIMENT_ID_ENV_VAR)
 
 
 def _get_experiment_id():
     return int(_active_experiment_id or
-               env.get_env(_EXPERIMENT_ID_ENV_VAR) or
+               _get_experiment_id_from_env() or
+               (is_in_databricks_notebook() and get_notebook_id()) or
                Experiment.DEFAULT_EXPERIMENT_ID)
-
-
-def _get_git_commit(path):
-    try:
-        from git import Repo, InvalidGitRepositoryError, GitCommandNotFound, NoSuchPathError
-    except ImportError as e:
-        eprint("Notice: failed to import Git (the Git executable is probably not on your PATH),"
-               " so Git SHA is not available. Error: %s" % e)
-        return None
-    try:
-        if os.path.isfile(path):
-            path = os.path.dirname(path)
-        repo = Repo(path, search_parent_directories=True)
-        commit = repo.head.commit.hexsha
-        return commit
-    except (InvalidGitRepositoryError, GitCommandNotFound, ValueError, NoSuchPathError):
-        return None

@@ -114,8 +114,25 @@ test("formatSource & renderSource", () => {
   });
   expect(Utils.formatSource(github_url)).toEqual("mlflow-apps:entry");
   expect(Utils.renderSource(github_url)).toEqual(
-    <a href="https://github.com/mlflow/mlflow-apps">mlflow-apps:entry</a>);
+    <a href="https://github.com/mlflow/mlflow-apps" target="_top">mlflow-apps:entry</a>);
 
+  const gitlab_url = RunInfo.fromJs({
+    "source_name": "git@gitlab.com:mlflow/mlflow-apps.git",
+    "entry_point_name": "entry",
+    "source_type": "PROJECT",
+  });
+  expect(Utils.formatSource(gitlab_url)).toEqual("mlflow-apps:entry");
+  expect(Utils.renderSource(gitlab_url)).toEqual(
+    <a href="https://gitlab.com/mlflow/mlflow-apps" target="_top">mlflow-apps:entry</a>);
+
+  const bitbucket_url = RunInfo.fromJs({
+    "source_name": "git@bitbucket.org:mlflow/mlflow-apps.git",
+    "entry_point_name": "entry",
+    "source_type": "PROJECT",
+  });
+  expect(Utils.formatSource(bitbucket_url)).toEqual("mlflow-apps:entry");
+  expect(Utils.renderSource(bitbucket_url)).toEqual(
+    <a href="https://bitbucket.org/mlflow/mlflow-apps" target="_top">mlflow-apps:entry</a>);
 
   const databricksRun = RunInfo.fromJs({
     "source_name": "/Users/admin/test",
@@ -127,7 +144,28 @@ test("formatSource & renderSource", () => {
   };
   const wrapper = shallow(Utils.renderSource(databricksRun, databricksRunTags));
   expect(wrapper.is("a")).toEqual(true);
-  expect(wrapper.props().href).toEqual("https://databricks.com/#notebook/13");
+  expect(wrapper.props().href).toEqual("http://localhost/#notebook/13");
+
+  const databricksRunRevisionTags = {
+    "mlflow.databricks.notebookRevisionID": { value: "42" },
+    "mlflow.databricks.notebookID": { value: "13" },
+    "mlflow.databricks.webappURL": { value: "https://databricks.com" },
+  };
+  const wrapper2 = shallow(Utils.renderSource(databricksRun, databricksRunRevisionTags));
+  expect(wrapper2.is("a")).toEqual(true);
+  expect(wrapper2.props().href).toEqual("http://localhost/#notebook/13/revision/42");
+
+  const wrapper3 = shallow(Utils.renderSource(databricksRun, databricksRunRevisionTags, "?o=123"));
+  expect(wrapper3.is("a")).toEqual(true);
+  // Query params must appear before the hash, see https://tools.ietf.org/html/rfc3986#section-4.2
+  // and https://stackoverflow.com/a/34772568
+  expect(wrapper3.props().href).toEqual("http://localhost/?o=123#notebook/13/revision/42");
+});
+
+test("addQueryParams", () => {
+  expect(Utils.setQueryParams("http://localhost/foo", "?o=123")).toEqual("http://localhost/foo?o=123");
+  expect(Utils.setQueryParams("http://localhost/foo?param=val", "?o=123")).toEqual("http://localhost/foo?o=123");
+  expect(Utils.setQueryParams("http://localhost/foo?param=val", "?param=newval")).toEqual("http://localhost/foo?param=newval");
 });
 
 test("dropExtension", () => {

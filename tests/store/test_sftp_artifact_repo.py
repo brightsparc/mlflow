@@ -2,7 +2,7 @@ from mock import Mock, MagicMock
 import pytest
 from tempfile import NamedTemporaryFile
 import pysftp
-from mlflow.store.artifact_repo import ArtifactRepository
+from mlflow.store.artifact_repository_registry import get_artifact_repository
 from mlflow.store.sftp_artifact_repo import SFTPArtifactRepository
 from mlflow.utils.file_utils import TempDir
 import os
@@ -13,11 +13,10 @@ def sftp_mock():
     return MagicMock(autospec=pysftp.Connection)
 
 
-@pytest.mark.large
 def test_artifact_uri_factory():
     from paramiko.ssh_exception import SSHException
     with pytest.raises(SSHException):
-        ArtifactRepository.from_artifact_uri(
+        get_artifact_repository(
             "sftp://user:pass@test_sftp:123/some/path",
             Mock())
 
@@ -42,8 +41,9 @@ def test_list_artifacts(sftp_mock):
     file_size = 678
     dir_path = "model"
     sftp_mock.isdir = MagicMock(side_effect=lambda path: {
-            (artifact_root_path+file_path): False,
-            (artifact_root_path+dir_path): True
+            artifact_root_path: True,
+            os.path.join(artifact_root_path, file_path): False,
+            os.path.join(artifact_root_path, dir_path): True,
         }[path])
     sftp_mock.listdir = MagicMock(return_value=[file_path, dir_path])
 
@@ -83,8 +83,9 @@ def test_list_artifacts_with_subdir(sftp_mock):
     sftp_mock.listdir = MagicMock(return_value=[file_path, subdir_name])
 
     sftp_mock.isdir = MagicMock(side_effect=lambda path: {
-            (artifact_root_path+dir_name+'/'+file_path): False,
-            (artifact_root_path+dir_name+'/'+subdir_name): True
+            os.path.join(artifact_root_path, dir_name): True,
+            os.path.join(artifact_root_path, dir_name, file_path): False,
+            os.path.join(artifact_root_path, dir_name, subdir_name): True,
         }[path])
 
     file_stat = MagicMock()
@@ -97,10 +98,10 @@ def test_list_artifacts_with_subdir(sftp_mock):
     sftp_mock.stat.assert_called_once_with(artifact_root_path + dir_name + '/' + file_path)
 
     assert len(artifacts) == 2
-    assert artifacts[0].path == dir_name + '/' + file_path
+    assert artifacts[0].path == os.path.join(dir_name, file_path)
     assert artifacts[0].is_dir is False
     assert artifacts[0].file_size == file_size
-    assert artifacts[1].path == dir_name + '/' + subdir_name
+    assert artifacts[1].path == os.path.join(dir_name, subdir_name)
     assert artifacts[1].is_dir is True
     assert artifacts[1].file_size is None
 

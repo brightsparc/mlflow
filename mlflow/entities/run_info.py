@@ -1,18 +1,19 @@
 from mlflow.entities._mlflow_object import _MLflowObject
+from mlflow.entities.lifecycle_stage import LifecycleStage
 from mlflow.exceptions import MlflowException
 
 from mlflow.protos.service_pb2 import RunInfo as ProtoRunInfo
 
 
 def check_run_is_active(run_info):
-    if run_info.lifecycle_stage != RunInfo.ACTIVE_LIFECYCLE:
-        raise MlflowException('The run {} must be in an active lifecycle_stage.'
+    if run_info.lifecycle_stage != LifecycleStage.ACTIVE:
+        raise MlflowException("The run {} must be in 'active' lifecycle_stage."
                               .format(run_info.run_uuid))
 
 
 def check_run_is_deleted(run_info):
-    if run_info.lifecycle_stage != RunInfo.DELETED_LIFECYCLE:
-        raise MlflowException('The run {} must be in an deleted lifecycle_stage.'
+    if run_info.lifecycle_stage != LifecycleStage.DELETED:
+        raise MlflowException("The run {} must be in 'deleted' lifecycle_stage."
                               .format(run_info.run_uuid))
 
 
@@ -20,8 +21,6 @@ class RunInfo(_MLflowObject):
     """
     Metadata about a run.
     """
-    ACTIVE_LIFECYCLE = "active"
-    DELETED_LIFECYCLE = "deleted"
 
     def __init__(self, run_uuid, experiment_id, name, source_type, source_name, entry_point_name,
                  user_id, status, start_time, end_time, source_version, lifecycle_stage,
@@ -168,14 +167,14 @@ class RunInfo(_MLflowObject):
 
     @classmethod
     def from_proto(cls, proto):
-        return cls(proto.run_uuid, proto.experiment_id, proto.name, proto.source_type,
-                   proto.source_name, proto.entry_point_name, proto.user_id, proto.status,
-                   proto.start_time, proto.end_time, proto.source_version, proto.lifecycle_stage,
-                   proto.artifact_uri)
-
-    @classmethod
-    def _properties(cls):
-        # TODO: Hard coding this list of props for now. There has to be a clearer way...
-        return ["run_uuid", "experiment_id", "name", "source_type", "source_name",
-                "entry_point_name", "user_id", "status", "start_time", "end_time",
-                "source_version", "lifecycle_stage", "artifact_uri"]
+        end_time = proto.end_time
+        # The proto2 default scalar value of zero indicates that the run's end time is absent.
+        # An absent end time is represented with a NoneType in the `RunInfo` class
+        if end_time == 0:
+            end_time = None
+        return cls(run_uuid=proto.run_uuid, experiment_id=proto.experiment_id, name=proto.name,
+                   source_type=proto.source_type, source_name=proto.source_name,
+                   entry_point_name=proto.entry_point_name, user_id=proto.user_id,
+                   status=proto.status, start_time=proto.start_time, end_time=end_time,
+                   source_version=proto.source_version, lifecycle_stage=proto.lifecycle_stage,
+                   artifact_uri=proto.artifact_uri)

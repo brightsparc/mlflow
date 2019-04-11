@@ -114,30 +114,92 @@ class Utils {
     return /[@/]github.com[:/]([^/.]+)\/([^/#]+)#?(.*)/;
   }
 
+  static getGitLabRegex() {
+    return /[@/]gitlab.com[:/]([^/.]+)\/([^/#]+)#?(.*)/;
+  }
+
+  static getBitbucketRegex() {
+    return /[@/]bitbucket.org[:/]([^/.]+)\/([^/#]+)#?(.*)/;
+  }
+
+  static getGitRepoUrl(source_name) {
+    const gitHubMatch = source_name.match(Utils.getGitHubRegex());
+    const gitLabMatch = source_name.match(Utils.getGitLabRegex());
+    const bitbucketMatch = source_name.match(Utils.getBitbucketRegex());
+    let url = null;
+    if (gitHubMatch || gitLabMatch) {
+      const baseUrl = gitHubMatch ? "https://github.com/" : "https://gitlab.com/";
+      const match = gitHubMatch || gitLabMatch;
+      url = baseUrl + match[1] + "/" + match[2].replace(/.git/, '');
+      if (match[3]) {
+        url = url + "/tree/master/" + match[3];
+      }
+    } else if (bitbucketMatch) {
+      const baseUrl = "https://bitbucket.org/";
+      url = baseUrl + bitbucketMatch[1] + "/" + bitbucketMatch[2].replace(/.git/, '');
+      if (bitbucketMatch[3]) {
+        url = url + "/src/master/" + bitbucketMatch[3];
+      }
+    }
+    return url;
+  }
+
+  static getGitCommitUrl(source_name, source_version) {
+    const gitHubMatch = source_name.match(Utils.getGitHubRegex());
+    const gitLabMatch = source_name.match(Utils.getGitLabRegex());
+    const bitbucketMatch = source_name.match(Utils.getBitbucketRegex());
+    let url = null;
+    if (gitHubMatch || gitLabMatch) {
+      const baseUrl = gitHubMatch ? "https://github.com/" : "https://gitlab.com/";
+      const match = gitHubMatch || gitLabMatch;
+      url = (baseUrl + match[1] + "/" + match[2].replace(/.git/, '') +
+            "/tree/" + source_version) + "/" + match[3];
+    } else if (bitbucketMatch) {
+      const baseUrl = "https://bitbucket.org/";
+      url = (baseUrl + bitbucketMatch[1] + "/" + bitbucketMatch[2].replace(/.git/, '') +
+            "/src/" + source_version) + "/" + bitbucketMatch[3];
+    }
+    return url;
+  }
+
+  /**
+   * Returns a copy of the provided URL with its query parameters set to `queryParams`.
+   * @param url URL string like "http://my-mlflow-server.com/#/experiments/9.
+   * @param queryParams Optional query parameter string like "?param=12345". Query params provided
+   *        via this string will override existing query param values in `url`
+   */
+  static setQueryParams(url, queryParams) {
+    const urlObj = new URL(url);
+    urlObj.search = queryParams || "";
+    return urlObj.toString();
+  }
+
   /**
    * Renders the source name and entry point into an HTML element. Used for display.
    * @param run MlflowMessages.RunInfo
    * @param tags Object containing tag key value pairs.
+   * @param queryParams Query params to add to certain source type links.
    */
-  static renderSource(run, tags) {
+  static renderSource(run, tags, queryParams) {
     let res = Utils.formatSource(run);
     if (run.source_type === "PROJECT") {
-      const match = run.source_name.match(Utils.getGitHubRegex());
-      if (match) {
-        let url = "https://github.com/" + match[1] + "/" + match[2].replace(/.git/, '');
-        if (match[3]) {
-          url = url + "/tree/master/" + match[3];
-        }
-        res = <a href={url}>{res}</a>;
+      const url = Utils.getGitRepoUrl(run.source_name);
+      if (url) {
+        res = <a target="_top" href={url}>{res}</a>;
       }
       return res;
     } else if (run.source_type === "NOTEBOOK") {
+      const revisionIdTag = 'mlflow.databricks.notebookRevisionID';
       const notebookIdTag = 'mlflow.databricks.notebookID';
-      const webappUrlTag = 'mlflow.databricks.webappURL';
+      const revisionId = tags && tags[revisionIdTag] && tags[revisionIdTag].value;
       const notebookId = tags && tags[notebookIdTag] && tags[notebookIdTag].value;
-      const webappUrl = tags && tags[webappUrlTag] && tags[webappUrlTag].value;
-      if (notebookId && webappUrl) {
-        res = (<a title={run.source_name} href={`${webappUrl}/#notebook/${notebookId}`}>
+      if (notebookId) {
+        let url = Utils.setQueryParams(window.location.origin, queryParams);
+        url += `#notebook/${notebookId}`;
+        if (revisionId) {
+          url += `/revision/${revisionId}`;
+        }
+        res = (<a title={run.source_name} href={url} target='_top'>
           {Utils.baseName(run.source_name)}
         </a>);
       }
@@ -203,11 +265,9 @@ class Utils {
     if (run.source_version) {
       const versionString = shortVersion ? run.source_version.substring(0, 6) : run.source_version;
       if (run.source_type === "PROJECT") {
-        const match = run.source_name.match(Utils.getGitHubRegex());
-        if (match) {
-          const url = ("https://github.com/" + match[1] + "/" + match[2].replace(/.git/, '') +
-                     "/tree/" + run.source_version) + "/" + match[3];
-          return <a href={url}>{versionString}</a>;
+        const url = Utils.getGitCommitUrl(run.source_name, run.source_version);
+        if (url) {
+          return <a href={url} target='_top'>{versionString}</a>;
         }
         return versionString;
       } else {

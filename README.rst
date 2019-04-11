@@ -1,8 +1,8 @@
-====================
-MLflow Alpha Release
-====================
+===================
+MLflow Beta Release
+===================
 
-**Note:** The current version of MLflow is an alpha release. This means that APIs and data formats
+**Note:** The current version of MLflow is a beta release. This means that APIs and data formats
 are subject to change!
 
 **Note 2:** We do not currently support running MLflow on Windows. Despite this, we would appreciate any contributions
@@ -57,7 +57,7 @@ or a Git URI::
 
     mlflow run examples/sklearn_elasticnet_wine -P alpha=0.4
 
-    mlflow run git@github.com:mlflow/mlflow-example.git -P alpha=0.4
+    mlflow run https://github.com/mlflow/mlflow-example.git -P alpha=0.4
 
 See ``examples/sklearn_elasticnet_wine`` for a sample project with an MLproject file.
 

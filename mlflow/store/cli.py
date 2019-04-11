@@ -1,10 +1,13 @@
-from mlflow.utils.logging_utils import eprint
+import logging
 
 import click
 
 from mlflow.tracking import _get_store
-from mlflow.store.artifact_repo import ArtifactRepository
+from mlflow.store.artifact_repository_registry import get_artifact_repository
 from mlflow.utils.proto_json_utils import message_to_json
+
+
+_logger = logging.getLogger(__name__)
 
 
 @click.group("artifacts")
@@ -28,15 +31,16 @@ def commands():
                    "run's artifact directory.")
 def log_artifact(local_file, run_id, artifact_path):
     """
-    Logs a local file as an artifact of a run, optionally within a run-specific
+    Log a local file as an artifact of a run, optionally within a run-specific
     artifact path. Run artifacts can be organized into directories, so you can
     place the artifact in a directory this way.
     """
     store = _get_store()
     artifact_uri = store.get_run(run_id).info.artifact_uri
-    artifact_repo = ArtifactRepository.from_artifact_uri(artifact_uri, store)
+    artifact_repo = get_artifact_repository(artifact_uri, store)
     artifact_repo.log_artifact(local_file, artifact_path)
-    eprint("Logged artifact from local file %s to artifact_path=%s" % (local_file, artifact_path))
+    _logger.info("Logged artifact from local file %s to artifact_path=%s",
+                 local_file, artifact_path)
 
 
 @commands.command("log-artifacts")
@@ -49,15 +53,15 @@ def log_artifact(local_file, run_id, artifact_path):
                    "run's artifact directory.")
 def log_artifacts(local_dir, run_id, artifact_path):
     """
-    Logs the files within a local directory as an artifact of a run, optionally
+    Log the files within a local directory as an artifact of a run, optionally
     within a run-specific artifact path. Run artifacts can be organized into
     directories, so you can place the artifact in a directory this way.
     """
     store = _get_store()
     artifact_uri = store.get_run(run_id).info.artifact_uri
-    artifact_repo = ArtifactRepository.from_artifact_uri(artifact_uri, store)
+    artifact_repo = get_artifact_repository(artifact_uri, store)
     artifact_repo.log_artifacts(local_dir, artifact_path)
-    eprint("Logged artifact from local dir %s to artifact_path=%s" % (local_dir, artifact_path))
+    _logger.info("Logged artifact from local dir %s to artifact_path=%s", local_dir, artifact_path)
 
 
 @commands.command("list")
@@ -73,7 +77,7 @@ def list_artifacts(run_id, artifact_path):
     artifact_path = artifact_path if artifact_path is not None else ""
     store = _get_store()
     artifact_uri = store.get_run(run_id).info.artifact_uri
-    artifact_repo = ArtifactRepository.from_artifact_uri(artifact_uri, store)
+    artifact_repo = get_artifact_repository(artifact_uri, store)
     file_infos = artifact_repo.list_artifacts(artifact_path)
     print(_file_infos_to_json(file_infos))
 
@@ -96,6 +100,6 @@ def download_artifacts(run_id, artifact_path):
     artifact_path = artifact_path if artifact_path is not None else ""
     store = _get_store()
     artifact_uri = store.get_run(run_id).info.artifact_uri
-    artifact_repo = ArtifactRepository.from_artifact_uri(artifact_uri, store)
+    artifact_repo = get_artifact_repository(artifact_uri, store)
     artifact_location = artifact_repo.download_artifacts(artifact_path)
     print(artifact_location)

@@ -14,42 +14,37 @@ from mlflow.exceptions import MlflowException
 from mlflow.protos import databricks_pb2
 from mlflow.protos.service_pb2 import CreateExperiment, MlflowService, GetExperiment, \
     GetRun, SearchRuns, ListArtifacts, GetMetricHistory, CreateRun, \
-    UpdateRun, LogMetric, LogParam, SetTag, ListExperiments, GetMetric, GetParam, \
-    DeleteExperiment, RestoreExperiment, RestoreRun, DeleteRun, UpdateExperiment
-from mlflow.store.artifact_repo import ArtifactRepository
-from mlflow.store.file_store import FileStore
-from mlflow.store.dynamodb_store import DynamodbStore
+    UpdateRun, LogMetric, LogParam, SetTag, ListExperiments, \
+    DeleteExperiment, RestoreExperiment, RestoreRun, DeleteRun, UpdateExperiment, LogBatch
+from mlflow.store.artifact_repository_registry import get_artifact_repository
+from mlflow.tracking.utils import _is_database_uri, _is_local_uri
 from mlflow.utils.proto_json_utils import message_to_json, parse_dict
-
+from mlflow.utils.search_utils import SearchFilter
+from mlflow.utils.validation import _validate_batch_log_api_req
 
 _store = None
 
 
 def _get_store():
-    from mlflow.server import FILE_STORE_ENV_VAR, ARTIFACT_ROOT_ENV_VAR
+    from mlflow.server import BACKEND_STORE_URI_ENV_VAR, ARTIFACT_ROOT_ENV_VAR
     global _store
     if _store is None:
-        store_uri = os.environ.get(FILE_STORE_ENV_VAR, os.path.abspath("mlruns"))
-        if _is_dynamodb_uri(store_uri):
-            _store = _get_dynamodb_store(store_uri)
+        store_dir = os.environ.get(BACKEND_STORE_URI_ENV_VAR, None)
+        artifact_root = os.environ.get(ARTIFACT_ROOT_ENV_VAR, None)
+        if _is_database_uri(store_dir):
+            from mlflow.store.sqlalchemy_store import SqlAlchemyStore
+            return SqlAlchemyStore(store_dir, artifact_root)
+        elif _is_local_uri(store_dir):
+            from mlflow.store.file_store import FileStore
+            _store = FileStore(store_dir, artifact_root)
         else:
-            artifact_root = os.environ.get(ARTIFACT_ROOT_ENV_VAR, store_uri)
-            _store = FileStore(store_uri, artifact_root)
+            raise MlflowException("Unexpected URI type '{}' for backend store. "
+                                  "Expext local file or database type.".format(store_dir))
     return _store
 
 
-def _is_dynamodb_uri(uri):
-    """Dynamodb URIs look like 'dynamodb' (default table) or 'dynamodb://table_prefix'"""
-    scheme = urllib.parse.urlparse(uri).scheme
-    return scheme == 'dynamodb' or uri == 'dynamodb'
-
-
-def _get_dynamodb_store(dynamodb_uri):
-    if dynamodb_uri == 'dynamodb':
-        return DynamodbStore()
-    else:
-        path = urllib.parse.urlparse(dynamodb_uri).path
-        return DynamodbStore(table_prefix=path)
+def _get_request_json(flask_request=request):
+    return flask_request.get_json(force=True, silent=True)
 
 
 def _get_request_message(request_message, flask_request=request):
@@ -64,7 +59,7 @@ def _get_request_message(request_message, flask_request=request):
         parse_dict(request_dict, request_message)
         return request_message
 
-    request_json = flask_request.get_json(force=True, silent=True)
+    request_json = _get_request_json(flask_request)
 
     # Older clients may post their JSON double-encoded as strings, so the get_json
     # above actually converts it to a string. Therefore, we check this condition
@@ -112,10 +107,12 @@ def get_artifact_handler():
     run = _get_store().get_run(request_dict['run_uuid'])
     filename = os.path.abspath(_get_artifact_repo(run).download_artifacts(request_dict['path']))
     extension = os.path.splitext(filename)[-1].replace(".", "")
+    # Always send artifacts as attachments to prevent the browser from displaying them on our web
+    # server's domain, which might enable XSS.
     if extension in _TEXT_EXTENSIONS:
-        return send_file(filename, mimetype='text/plain')
+        return send_file(filename, mimetype='text/plain', as_attachment=True)
     else:
-        return send_file(filename)
+        return send_file(filename, as_attachment=True)
 
 
 def _not_implemented():
@@ -286,9 +283,9 @@ def _search_runs():
     run_view_type = ViewType.ACTIVE_ONLY
     if request_message.HasField('run_view_type'):
         run_view_type = ViewType.from_proto(request_message.run_view_type)
-    run_entities = _get_store().search_runs(request_message.experiment_ids,
-                                            request_message.anded_expressions,
-                                            run_view_type)
+    sf = SearchFilter(anded_expressions=request_message.anded_expressions,
+                      filter_string=request_message.filter)
+    run_entities = _get_store().search_runs(request_message.experiment_ids, sf, run_view_type)
     response_message.runs.extend([r.to_proto() for r in run_entities])
     response = Response(mimetype='application/json')
     response.set_data(message_to_json(response_message))
@@ -325,28 +322,6 @@ def _get_metric_history():
 
 
 @catch_mlflow_exception
-def _get_metric():
-    request_message = _get_request_message(GetMetric())
-    response_message = GetMetric.Response()
-    metric = _get_store().get_metric(request_message.run_uuid, request_message.metric_key)
-    response_message.metric.MergeFrom(metric.to_proto())
-    response = Response(mimetype='application/json')
-    response.set_data(message_to_json(response_message))
-    return response
-
-
-@catch_mlflow_exception
-def _get_param():
-    request_message = _get_request_message(GetParam())
-    response_message = GetParam.Response()
-    parameter = _get_store().get_param(request_message.run_uuid, request_message.param_name)
-    response_message.parameter.MergeFrom(parameter.to_proto())
-    response = Response(mimetype='application/json')
-    response.set_data(message_to_json(response_message))
-    return response
-
-
-@catch_mlflow_exception
 def _list_experiments():
     request_message = _get_request_message(ListExperiments())
     experiment_entities = _get_store().list_experiments(request_message.view_type)
@@ -360,16 +335,21 @@ def _list_experiments():
 @catch_mlflow_exception
 def _get_artifact_repo(run):
     store = _get_store()
-    if run.info.artifact_uri:
-        return ArtifactRepository.from_artifact_uri(run.info.artifact_uri, store)
-    if not store.root_directory:
-        raise MlflowException("Store doesn't support artifacts")
+    return get_artifact_repository(run.info.artifact_uri, store)
 
-    # TODO(aaron) Remove this once everyone locally only has runs from after
-    # the introduction of "artifact_uri".
-    uri = os.path.join(store.root_directory, str(run.info.experiment_id),
-                       run.info.run_uuid, "artifacts")
-    return ArtifactRepository.from_artifact_uri(uri, store)
+
+@catch_mlflow_exception
+def _log_batch():
+    _validate_batch_log_api_req(_get_request_json())
+    request_message = _get_request_message(LogBatch())
+    metrics = [Metric.from_proto(proto_metric) for proto_metric in request_message.metrics]
+    params = [Param.from_proto(proto_param) for proto_param in request_message.params]
+    tags = [RunTag.from_proto(proto_tag) for proto_tag in request_message.tags]
+    _get_store().log_batch(run_id=request_message.run_id, metrics=metrics, params=params, tags=tags)
+    response_message = LogBatch.Response()
+    response = Response(mimetype='application/json')
+    response.set_data(message_to_json(response_message))
+    return response
 
 
 def _get_paths(base_path):
@@ -409,11 +389,10 @@ HANDLERS = {
     LogParam: _log_param,
     LogMetric: _log_metric,
     SetTag: _set_tag,
+    LogBatch: _log_batch,
     GetRun: _get_run,
     SearchRuns: _search_runs,
     ListArtifacts: _list_artifacts,
     GetMetricHistory: _get_metric_history,
     ListExperiments: _list_experiments,
-    GetParam: _get_param,
-    GetMetric: _get_metric,
 }
