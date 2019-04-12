@@ -10,12 +10,14 @@ import pytest
 
 from moto.dynamodb2 import mock_dynamodb2
 
+from mlflow.entities.lifecycle_stage import LifecycleStage
 from mlflow.entities import Experiment, Metric, Param, RunTag, ViewType, RunInfo
 from mlflow.exceptions import MlflowException
 from mlflow.store.file_store import FileStore
 from mlflow.store.dynamodb_store import DynamodbStore
 from mlflow.utils.mlflow_tags import MLFLOW_PARENT_RUN_ID
 from tests.helper_functions import random_int, random_str
+from mlflow.utils.search_utils import SearchFilter
 
 
 class TestDynamodbStore(unittest.TestCase):
@@ -87,7 +89,7 @@ class TestDynamodbStore(unittest.TestCase):
             d = {"experiment_id": exp,
                  "name": random_str(),
                  "artifact_location": exp_folder,
-                 "lifecycle_stage": RunInfo.ACTIVE_LIFECYCLE,  # Must write for tests
+                 "lifecycle_stage": LifecycleStage.ACTIVE,  # Must write for tests
                  }
             self.exp_data[exp] = d
             self._write_table('experiment', d)
@@ -110,7 +112,7 @@ class TestDynamodbStore(unittest.TestCase):
                             "source_version": random_str(random_int(10, 30)),
                             "tags": [],
                             "artifact_uri": "%s/%s" % (run_folder, FileStore.ARTIFACTS_FOLDER_NAME),
-                            "lifecycle_stage": RunInfo.ACTIVE_LIFECYCLE,  # Must write for tests
+                            "lifecycle_stage": LifecycleStage.ACTIVE,  # Must write for tests
                             }
                 self._write_table('run', run_info)
                 self.run_data[run_uuid] = run_info
@@ -230,7 +232,7 @@ class TestDynamodbStore(unittest.TestCase):
         exps = self._extract_ids(fs.list_experiments(ViewType.ALL))
         self.assertTrue(exp_id in exps)
         self.assertEqual(fs.get_experiment(exp_id).lifecycle_stage,
-                         Experiment.DELETED_LIFECYCLE)
+                         LifecycleStage.DELETED)
 
         # restore it
         fs.restore_experiment(exp_id)
@@ -244,7 +246,7 @@ class TestDynamodbStore(unittest.TestCase):
         self.assertTrue(exp_id not in self._extract_ids(fs.list_experiments(ViewType.DELETED_ONLY)))
         self.assertTrue(exp_id in self._extract_ids(fs.list_experiments(ViewType.ALL)))
         self.assertEqual(fs.get_experiment(exp_id).lifecycle_stage,
-                         Experiment.ACTIVE_LIFECYCLE)
+                         LifecycleStage.ACTIVE)
 
     def test_rename_experiment(self):
         fs = self._get_store()
@@ -301,7 +303,7 @@ class TestDynamodbStore(unittest.TestCase):
                 run_info.pop("metrics")
                 run_info.pop("params")
                 run_info.pop("tags")
-                run_info['lifecycle_stage'] = RunInfo.ACTIVE_LIFECYCLE
+                run_info['lifecycle_stage'] = LifecycleStage.ACTIVE
                 self.assertEqual(run_info, dict(run.info))
 
     def test_list_run_infos(self):
@@ -315,7 +317,7 @@ class TestDynamodbStore(unittest.TestCase):
                 dict_run_info.pop("metrics", None)
                 dict_run_info.pop("params", None)
                 dict_run_info.pop("tags", None)
-                dict_run_info['lifecycle_stage'] = RunInfo.ACTIVE_LIFECYCLE
+                dict_run_info['lifecycle_stage'] = LifecycleStage.ACTIVE
                 self.assertEqual(dict_run_info, dict(run_info))
 
     def test_get_metric(self):
@@ -379,11 +381,12 @@ class TestDynamodbStore(unittest.TestCase):
         # replace with test with code is implemented
         fs = self._get_store()
         # Expect 2 runs for each experiment
-        runs = fs.search_runs([self.experiments[0]], [], run_view_type=ViewType.ACTIVE_ONLY)
+        search_filter = SearchFilter(filter_string=None)
+        runs = fs.search_runs([self.experiments[0]], search_filter, run_view_type=ViewType.ACTIVE_ONLY)
         assert len(runs) == 2
-        runs = fs.search_runs([self.experiments[0]], [], run_view_type=ViewType.ALL)
+        runs = fs.search_runs([self.experiments[0]], search_filter, run_view_type=ViewType.ALL)
         assert len(runs) == 2
-        runs = fs.search_runs([self.experiments[0]], [], run_view_type=ViewType.DELETED_ONLY)
+        runs = fs.search_runs([self.experiments[0]], search_filter, run_view_type=ViewType.DELETED_ONLY)
         assert len(runs) == 0
 
     def test_weird_param_names(self):
@@ -475,7 +478,7 @@ class TestDynamodbStore(unittest.TestCase):
         run_id = self.exp_data[exp_id]['runs'][0]
         fs.delete_run(run_id)
 
-        assert fs.get_run(run_id).info.lifecycle_stage == RunInfo.DELETED_LIFECYCLE
+        assert fs.get_run(run_id).info.lifecycle_stage == LifecycleStage.DELETED
         with pytest.raises(MlflowException):
             fs.set_tag(run_id, RunTag('a', 'b'))
         with pytest.raises(MlflowException):
@@ -496,4 +499,4 @@ class TestDynamodbStore(unittest.TestCase):
         fs = self._get_store()
         fs.delete_experiment(Experiment.DEFAULT_EXPERIMENT_ID)
         fs = self._get_store()
-        assert fs.get_experiment(0).lifecycle_stage == Experiment.DELETED_LIFECYCLE
+        assert fs.get_experiment(0).lifecycle_stage == LifecycleStage.DELETED

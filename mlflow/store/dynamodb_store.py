@@ -5,6 +5,7 @@ import boto3
 from boto3.dynamodb.conditions import Key, And
 from decimal import Decimal
 
+from mlflow.entities.lifecycle_stage import LifecycleStage
 from mlflow.entities import Experiment, Metric, Param, Run, RunData, RunInfo, RunStatus, RunTag, \
                             ViewType
 from mlflow.entities.run_info import check_run_is_active, \
@@ -13,12 +14,10 @@ from mlflow.exceptions import MlflowException
 import mlflow.protos.databricks_pb2 as databricks_pb2
 from mlflow.store.abstract_store import AbstractStore
 from mlflow.utils.validation import _validate_metric_name, _validate_param_name, _validate_run_id, \
-                                    _validate_tag_name
+                                    _validate_tag_name, _validate_batch_log_limits, _validate_batch_log_data
 
 from mlflow.utils.env import get_env
 from mlflow.utils.mlflow_tags import MLFLOW_RUN_NAME, MLFLOW_PARENT_RUN_ID
-
-from mlflow.utils.search_utils import does_run_match_clause
 
 _DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
 _DYNAMODB_TABLE_PREFIX_VAR = "MLFLOW_DYNAMODB_TABLE_PREFIX"
@@ -93,9 +92,9 @@ def _entity_to_dict(obj):
 def _filter_view_type(d, view_type=None):
     return view_type is None or view_type == ViewType.ALL or \
         (view_type == ViewType.ACTIVE_ONLY and
-            d.get('lifecycle_stage') == RunInfo.ACTIVE_LIFECYCLE) or \
+            d.get('lifecycle_stage') == LifecycleStage.ACTIVE) or \
         (view_type == ViewType.DELETED_ONLY and
-            d.get('lifecycle_stage') == RunInfo.DELETED_LIFECYCLE)
+            d.get('lifecycle_stage') == LifecycleStage.DELETED)
 
 
 def _filter_experiment(experiments, view_type=None, name=None):
@@ -303,9 +302,9 @@ class DynamodbStore(AbstractStore):
         condition = None
         if self.use_gsi and view_type and view_type != ViewType.ALL:
             if view_type == ViewType.ACTIVE_ONLY:
-                condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE)
+                condition = Key('lifecycle_stage').eq(LifecycleStage.ACTIVE)
             elif view_type == ViewType.DELETED_ONLY:
-                condition = Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
+                condition = Key('lifecycle_stage').eq(LifecycleStage.DELETED)
             if name:
                 condition = And(condition, Key('name').eq(name))
             response = table.query(
@@ -370,7 +369,7 @@ class DynamodbStore(AbstractStore):
             experiment_id=experiment_id,
             name=name,
             artifact_location=artifact_uri,
-            lifecycle_stage=RunInfo.ACTIVE_LIFECYCLE
+            lifecycle_stage=LifecycleStage.ACTIVE
         )
         response = table.put_item(
             Item=_entity_to_dict(exp),
@@ -453,21 +452,21 @@ class DynamodbStore(AbstractStore):
 
     def delete_experiment(self, experiment_id):
         experiment = self.get_experiment(experiment_id)
-        if experiment.lifecycle_stage != Experiment.ACTIVE_LIFECYCLE:
+        if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
             raise MlflowException("Could not find experiment with ID %s" % experiment_id,
                                   databricks_pb2.RESOURCE_DOES_NOT_EXIST)
         return self._update_experiment_status(experiment_id,
-                                              RunInfo.ACTIVE_LIFECYCLE,
-                                              RunInfo.DELETED_LIFECYCLE)
+                                              LifecycleStage.ACTIVE,
+                                              LifecycleStage.DELETED)
 
     def restore_experiment(self, experiment_id):
         experiment = self.get_experiment(experiment_id)
-        if experiment.lifecycle_stage != Experiment.DELETED_LIFECYCLE:
+        if experiment.lifecycle_stage != LifecycleStage.DELETED:
             raise MlflowException("Could not find deleted experiment with ID %s" % experiment_id,
                                   databricks_pb2.RESOURCE_DOES_NOT_EXIST)
         return self._update_experiment_status(experiment_id,
-                                              RunInfo.DELETED_LIFECYCLE,
-                                              RunInfo.ACTIVE_LIFECYCLE)
+                                              LifecycleStage.DELETED,
+                                              LifecycleStage.ACTIVE)
 
     def _rename_experiment(self, experiment_id, new_name):
         dynamodb = self._get_dynamodb_resource()
@@ -493,7 +492,7 @@ class DynamodbStore(AbstractStore):
 
     def rename_experiment(self, experiment_id, new_name):
         experiment = self.get_experiment(experiment_id)
-        if experiment.lifecycle_stage != Experiment.ACTIVE_LIFECYCLE:
+        if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
             raise Exception("Cannot rename experiment in non-active lifecycle stage."
                             " Current stage: %s" % experiment.lifecycle_stage)
         return _dict_to_experiment(self._rename_experiment(experiment_id, new_name))
@@ -541,16 +540,16 @@ class DynamodbStore(AbstractStore):
         run_info = self._get_run_info(run_id)
         check_run_is_active(run_info)
         return self._update_run_status(run_id,
-                                       RunInfo.ACTIVE_LIFECYCLE,
-                                       RunInfo.DELETED_LIFECYCLE)
+                                       LifecycleStage.ACTIVE,
+                                       LifecycleStage.DELETED)
 
     def restore_run(self, run_id):
         _validate_run_id(run_id)
         run_info = self._get_run_info(run_id)
         check_run_is_deleted(run_info)
         return self._update_run_status(run_id,
-                                       RunInfo.DELETED_LIFECYCLE,
-                                       RunInfo.ACTIVE_LIFECYCLE)
+                                       LifecycleStage.DELETED,
+                                       LifecycleStage.ACTIVE)
 
     def _update_run_info(self, run_uuid, run_status, end_time):
         dynamodb = self._get_dynamodb_resource()
@@ -567,7 +566,7 @@ class DynamodbStore(AbstractStore):
                 '#end_time': 'end_time',
             },
             ExpressionAttributeValues={
-                ':l': RunInfo.ACTIVE_LIFECYCLE,
+                ':l': LifecycleStage.ACTIVE,
                 ':run_status': run_status,
                 ':end_time': end_time,
             },
@@ -608,7 +607,7 @@ class DynamodbStore(AbstractStore):
                     "Could not create run under experiment with ID %s - no such experiment "
                     "exists." % experiment_id,
                     databricks_pb2.RESOURCE_DOES_NOT_EXIST)
-        if experiment.lifecycle_stage != Experiment.ACTIVE_LIFECYCLE:
+        if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
             raise MlflowException(
                     "Could not create run under non-active experiment with ID "
                     "%s." % experiment_id,
@@ -621,7 +620,7 @@ class DynamodbStore(AbstractStore):
                            source_name=source_name,
                            entry_point_name=entry_point_name, user_id=user_id,
                            status=RunStatus.RUNNING, start_time=start_time, end_time=None,
-                           source_version=source_version, lifecycle_stage=RunInfo.ACTIVE_LIFECYCLE)
+                           source_version=source_version, lifecycle_stage=LifecycleStage.ACTIVE)
         if self._create_run_info(_entity_to_dict(run_info)):
             for tag in tags:
                 self.set_tag(run_uuid, tag)
@@ -762,9 +761,9 @@ class DynamodbStore(AbstractStore):
         condition = None
         if self.use_gsi and view_type and view_type != ViewType.ALL:
             if view_type == ViewType.ACTIVE_ONLY:
-                condition = Key('lifecycle_stage').eq(RunInfo.ACTIVE_LIFECYCLE)
+                condition = Key('lifecycle_stage').eq(LifecycleStage.ACTIVE)
             elif view_type == ViewType.DELETED_ONLY:
-                condition = Key('lifecycle_stage').eq(RunInfo.DELETED_LIFECYCLE)
+                condition = Key('lifecycle_stage').eq(LifecycleStage.DELETED)
             if experiment_id:
                 condition = And(condition, Key('experiment_id').eq(experiment_id))
             response = table.query(
@@ -814,18 +813,15 @@ class DynamodbStore(AbstractStore):
             return response['Responses'][table_name]
         return []
 
-    def search_runs(self, experiment_ids, search_expressions, run_view_type):
-        #  Only return run_info not full runs
+    def search_runs(self, experiment_ids, search_filter, run_view_type):
         matched_runs = []
         for experiment_id in experiment_ids:
             run_uuids = self._list_runs_uuids(experiment_id, run_view_type)
-            runs = [_dict_to_run_info(r) for r in self._get_run_list(run_uuids)]
-            if len(search_expressions) == 0:
-                for run in runs:
-                    if all([does_run_match_clause(run, s) for s in search_expressions]):
-                        matched_runs.append(run)
-            else:
-                matched_runs += runs
+            run_infos = [_dict_to_run_info(r) for r in self._get_run_list(run_uuids)]
+            for run_info in run_infos:
+                run = Run(run_info=run_info, run_data=None)
+                if search_filter.filter(run):
+                    matched_runs.append(run)
         return matched_runs
 
     def list_run_infos(self, experiment_id, run_view_type):
@@ -904,3 +900,19 @@ class DynamodbStore(AbstractStore):
         if response['ResponseMetadata']['HTTPStatusCode'] != 200:
             raise MlflowException("DynamoDB connection error")
         return True
+
+    def log_batch(self, run_id, metrics, params, tags):
+        _validate_run_id(run_id)
+        _validate_batch_log_data(metrics, params, tags)
+        _validate_batch_log_limits(metrics, params, tags)
+        try:
+            for param in params:
+                self.log_param(run_id, param)
+            for metric in metrics:
+                self.log_metric(run_id, metric)
+            for tag in tags:
+                self.set_tag(run_id, tag)
+        except MlflowException as e:
+            raise e
+        except Exception as e:
+            raise MlflowException(e, databricks_pb2.INTERNAL_ERROR)
