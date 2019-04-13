@@ -11,7 +11,7 @@ import pytest
 from moto.dynamodb2 import mock_dynamodb2
 
 from mlflow.entities.lifecycle_stage import LifecycleStage
-from mlflow.entities import Experiment, Metric, Param, RunTag, ViewType, RunInfo
+from mlflow.entities import Experiment, Metric, Param, RunTag, ViewType
 from mlflow.exceptions import MlflowException
 from mlflow.store.file_store import FileStore
 from mlflow.store.dynamodb_store import DynamodbStore
@@ -381,12 +381,12 @@ class TestDynamodbStore(unittest.TestCase):
         # replace with test with code is implemented
         fs = self._get_store()
         # Expect 2 runs for each experiment
-        search_filter = SearchFilter(filter_string=None)
-        runs = fs.search_runs([self.experiments[0]], search_filter, run_view_type=ViewType.ACTIVE_ONLY)
+        sf = SearchFilter(filter_string=None)
+        runs = fs.search_runs([self.experiments[0]], sf, run_view_type=ViewType.ACTIVE_ONLY)
         assert len(runs) == 2
-        runs = fs.search_runs([self.experiments[0]], search_filter, run_view_type=ViewType.ALL)
+        runs = fs.search_runs([self.experiments[0]], sf, run_view_type=ViewType.ALL)
         assert len(runs) == 2
-        runs = fs.search_runs([self.experiments[0]], search_filter, run_view_type=ViewType.DELETED_ONLY)
+        runs = fs.search_runs([self.experiments[0]], sf, run_view_type=ViewType.DELETED_ONLY)
         assert len(runs) == 0
 
     def test_weird_param_names(self):

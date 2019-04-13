@@ -7,14 +7,14 @@ from decimal import Decimal
 
 from mlflow.entities.lifecycle_stage import LifecycleStage
 from mlflow.entities import Experiment, Metric, Param, Run, RunData, RunInfo, RunStatus, RunTag, \
-                            ViewType
-from mlflow.entities.run_info import check_run_is_active, \
-    check_run_is_deleted
+    ViewType
+from mlflow.entities.run_info import check_run_is_active, check_run_is_deleted
 from mlflow.exceptions import MlflowException
-import mlflow.protos.databricks_pb2 as databricks_pb2
+from mlflow.protos.databricks_pb2 import INVALID_PARAMETER_VALUE, RESOURCE_ALREADY_EXISTS, \
+    INVALID_STATE, RESOURCE_DOES_NOT_EXIST, INTERNAL_ERROR
 from mlflow.store.abstract_store import AbstractStore
 from mlflow.utils.validation import _validate_metric_name, _validate_param_name, _validate_run_id, \
-                                    _validate_tag_name, _validate_batch_log_limits, _validate_batch_log_data
+    _validate_tag_name, _validate_batch_log_limits, _validate_batch_log_data
 
 from mlflow.utils.env import get_env
 from mlflow.utils.mlflow_tags import MLFLOW_RUN_NAME, MLFLOW_PARENT_RUN_ID
@@ -382,11 +382,11 @@ class DynamodbStore(AbstractStore):
     def create_experiment(self, name, artifact_location=None):
         if name is None or name == "":
             raise MlflowException("Invalid experiment name '%s'" % name,
-                                  databricks_pb2.INVALID_PARAMETER_VALUE)
+                                  INVALID_PARAMETER_VALUE)
 
         if self._list_experiments(name=name):
             raise MlflowException("Experiment '%s' already exists." % name,
-                                  databricks_pb2.RESOURCE_ALREADY_EXISTS)
+                                  RESOURCE_ALREADY_EXISTS)
         # Get all existing experiments and find the one with largest ID.
         # len(list_all(..)) would not work when experiments are deleted.
         experiments_ids = [e.experiment_id for e in self.list_experiments(ViewType.ALL)]
@@ -418,7 +418,7 @@ class DynamodbStore(AbstractStore):
         exp = self._get_experiment(experiment_id)
         if exp is None:
             raise MlflowException("Could not find experiment with ID %s" % experiment_id,
-                                  databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                                  RESOURCE_DOES_NOT_EXIST)
         return _dict_to_experiment(exp)
 
     def get_experiment_by_name(self, name):
@@ -454,7 +454,7 @@ class DynamodbStore(AbstractStore):
         experiment = self.get_experiment(experiment_id)
         if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
             raise MlflowException("Could not find experiment with ID %s" % experiment_id,
-                                  databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                                  RESOURCE_DOES_NOT_EXIST)
         return self._update_experiment_status(experiment_id,
                                               LifecycleStage.ACTIVE,
                                               LifecycleStage.DELETED)
@@ -463,7 +463,7 @@ class DynamodbStore(AbstractStore):
         experiment = self.get_experiment(experiment_id)
         if experiment.lifecycle_stage != LifecycleStage.DELETED:
             raise MlflowException("Could not find deleted experiment with ID %s" % experiment_id,
-                                  databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                                  RESOURCE_DOES_NOT_EXIST)
         return self._update_experiment_status(experiment_id,
                                               LifecycleStage.DELETED,
                                               LifecycleStage.ACTIVE)
@@ -512,7 +512,7 @@ class DynamodbStore(AbstractStore):
         if 'Item' in response:
             return _dict_to_run_info(response['Item'])
         raise MlflowException("Run '%s' not found" % run_uuid,
-                              databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                              RESOURCE_DOES_NOT_EXIST)
 
     def _update_run_status(self, run_uuid, before_lifecycle_stage, after_lifecycle_stage):
         dynamodb = self._get_dynamodb_resource()
@@ -606,12 +606,12 @@ class DynamodbStore(AbstractStore):
             raise MlflowException(
                     "Could not create run under experiment with ID %s - no such experiment "
                     "exists." % experiment_id,
-                    databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                    RESOURCE_DOES_NOT_EXIST)
         if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
             raise MlflowException(
                     "Could not create run under non-active experiment with ID "
                     "%s." % experiment_id,
-                    databricks_pb2.INVALID_STATE)
+                    INVALID_STATE)
         run_uuid = uuid.uuid4().hex
         artifact_uri = os.path.join(experiment.artifact_location, run_uuid, "artifacts")
         run_info = RunInfo(run_uuid=run_uuid, experiment_id=experiment_id,
@@ -680,7 +680,7 @@ class DynamodbStore(AbstractStore):
         metrics = self._get_run_metrics(run_uuid, metric_key)
         if not metrics:
             raise MlflowException("Metric '%s' not found under run '%s'" % (metric_key, run_uuid),
-                                  databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                                  RESOURCE_DOES_NOT_EXIST)
         return _list_to_run_metric(metrics)[0]
 
     def get_all_metrics(self, run_uuid):
@@ -729,7 +729,7 @@ class DynamodbStore(AbstractStore):
         params = self._get_run_params(run_uuid, param_name)
         if not params:
             raise MlflowException("Param '%s' not found under run '%s'" % (param_name, run_uuid),
-                                  databricks_pb2.RESOURCE_DOES_NOT_EXIST)
+                                  RESOURCE_DOES_NOT_EXIST)
         return _list_to_run_param(params)[0]
 
     def get_all_params(self, run_uuid):
@@ -915,4 +915,4 @@ class DynamodbStore(AbstractStore):
         except MlflowException as e:
             raise e
         except Exception as e:
-            raise MlflowException(e, databricks_pb2.INTERNAL_ERROR)
+            raise MlflowException(e, INTERNAL_ERROR)
