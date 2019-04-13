@@ -421,8 +421,8 @@ class DynamodbStore(AbstractStore):
                                   RESOURCE_DOES_NOT_EXIST)
         return _dict_to_experiment(exp)
 
-    def get_experiment_by_name(self, name):
-        exps = self._list_experiments(name=name)
+    def get_experiment_by_name(self, experiment_name):
+        exps = self._list_experiments(name=experiment_name)
         if exps:
             return _dict_to_experiment(exps[0])
         return None
