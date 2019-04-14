@@ -4,7 +4,6 @@ import os
 import re
 import six
 
-from six.moves import urllib
 from functools import wraps
 from flask import Response, request, send_file
 from querystring_parser import parser
@@ -17,7 +16,7 @@ from mlflow.protos.service_pb2 import CreateExperiment, MlflowService, GetExperi
     UpdateRun, LogMetric, LogParam, SetTag, ListExperiments, \
     DeleteExperiment, RestoreExperiment, RestoreRun, DeleteRun, UpdateExperiment, LogBatch
 from mlflow.store.artifact_repository_registry import get_artifact_repository
-from mlflow.tracking.utils import _is_database_uri, _is_local_uri
+from mlflow.tracking.utils import _get_store as _get_tracking_store
 from mlflow.utils.proto_json_utils import message_to_json, parse_dict
 from mlflow.utils.search_utils import SearchFilter
 from mlflow.utils.validation import _validate_batch_log_api_req
@@ -31,15 +30,7 @@ def _get_store():
     if _store is None:
         store_dir = os.environ.get(BACKEND_STORE_URI_ENV_VAR, None)
         artifact_root = os.environ.get(ARTIFACT_ROOT_ENV_VAR, None)
-        if _is_database_uri(store_dir):
-            from mlflow.store.sqlalchemy_store import SqlAlchemyStore
-            return SqlAlchemyStore(store_dir, artifact_root)
-        elif _is_local_uri(store_dir):
-            from mlflow.store.file_store import FileStore
-            _store = FileStore(store_dir, artifact_root)
-        else:
-            raise MlflowException("Unexpected URI type '{}' for backend store. "
-                                  "Expext local file or database type.".format(store_dir))
+        _store = _get_tracking_store(store_dir, artifact_root)
     return _store
 
 
