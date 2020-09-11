@@ -1,6 +1,8 @@
 import os
 import uuid
+from six.moves import urllib
 
+import botocore
 import boto3
 from boto3.dynamodb.conditions import Key, And
 from decimal import Decimal
@@ -17,7 +19,6 @@ from mlflow.entities import (
     RunTag,
     ViewType,
     SourceType,
-    ExperimentTag,
 )
 from mlflow.entities.run_info import check_run_is_active, check_run_is_deleted
 from mlflow.exceptions import MlflowException
@@ -65,6 +66,7 @@ def _dict_to_experiment(d):
 
 def _dict_to_run_info(d):
     return RunInfo(
+        run_id=d["run_id"],
         run_uuid=d["run_id"],
         experiment_id=str(d["experiment_id"]),
         user_id=d.get("user_id") or "",
@@ -155,27 +157,35 @@ class DynamodbStore(AbstractStore):
 
     def __init__(
         self,
-        table_prefix=None,
+        store_uri=None,
+        artifact_uri=None,  # Not supported by must be included
         endpoint_url=None,
         region_name=None,
         use_gsi=True,
         use_projections=True,
+        create_tables=True,
     ):
         """
         Create a new DynamodbStore for storing experiments and runs.
 
-        :param table_prefix: DynamoDb table prefix defaults to 'mlflow'
+        :param store_uri: DynamoDb scheme followed by table name 'dynamodb:mlflow'
+        :param artifact_uri: Required artifacts scheme
         :param endpoint_url: Optional endpoint url for testing Dynamodb Local
         :param region_name: Optional Name of the AWS region for Dynamodb
         :param use_gsi: Flag to query Global Secondary Indices, defaults to True.
         :param use_projections: Flag to use projections in queries, defaults to True.
         """
         super(DynamodbStore, self).__init__()
+        table_prefix = urllib.parse.urlparse(store_uri).path if store_uri else None
         self.table_prefix = table_prefix or _default_table_prefix()
         self.endpoint_url = endpoint_url or _default_endpoint_url()
         self.region_name = region_name
         self.use_gsi = use_gsi
         self.use_projections = use_projections
+        # Create tables if they don't exists along with default experiment (ID=0)
+        if create_tables and not self.check_tables_exist():
+            self.create_tables()
+            self.create_experiment("Default")
 
     def _get_dynamodb_client(self):
         return boto3.client(
@@ -187,8 +197,22 @@ class DynamodbStore(AbstractStore):
             "dynamodb", endpoint_url=self.endpoint_url, region_name=self.region_name
         )
 
+    def check_tables_exist(self):
+        try:
+            client = self._get_dynamodb_client()
+            table_name = "{}_{}".format(
+                self.table_prefix, DynamodbStore.EXPERIMENT_TABLE
+            )
+            response = client.describe_table(TableName=table_name)
+            return response["Table"] != None
+        except botocore.exceptions.ClientError as error:
+            print("error describing table", error)
+            return False
+        except Exception as error:
+            raise error
+
     def create_tables(self, rcu=1, wcu=1):
-        # create a mock dynamodb client, and create tables
+        print("create tables")
         client = self._get_dynamodb_client()
         table_name = "{}_{}".format(self.table_prefix, DynamodbStore.EXPERIMENT_TABLE)
         response = client.create_table(
@@ -269,6 +293,7 @@ class DynamodbStore(AbstractStore):
                 raise MlflowException("Unable to create table '%s'" % table_name)
 
     def delete_tables(self):
+        print("delete tables")
         client = self._get_dynamodb_client()
         for key in [
             DynamodbStore.EXPERIMENT_TABLE,
@@ -396,8 +421,6 @@ class DynamodbStore(AbstractStore):
             int(e.experiment_id) for e in self.list_experiments(ViewType.ALL)
         ]
         experiment_id = str(max(experiments_ids) + 1 if experiments_ids else 0)
-        # TODO: Switch so using this
-        # experiment_id = uuid.uuid4().hex
         return self._create_experiment_with_id(name, experiment_id, artifact_location)
 
     def _get_experiment(self, experiment_id):
@@ -873,7 +896,12 @@ class DynamodbStore(AbstractStore):
             run_ids = self._list_runs_ids(experiment_id, run_view_type)
             run_infos = [_dict_to_run_info(r) for r in self._get_run_list(run_ids)]
             for run_info in run_infos:
-                run = Run(run_info=run_info, run_data=None)
+                # Load the metrics, params and tags for the run
+                run_id = run_info.run_id
+                metrics = self.get_all_metrics(run_id)
+                params = self.get_all_params(run_id)
+                tags = self.get_all_tags(run_id)
+                run = Run(run_info, RunData(metrics, params, tags))
                 runs.append(run)
 
         filtered = SearchUtils.filter(runs, filter_string)

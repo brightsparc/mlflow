@@ -32,11 +32,13 @@ class TestDynamodbStore(unittest.TestCase):
     def setUp(self):
         # Test with localhost to test global secondary indices / projections
         if TestDynamodbStore.TEST_LOCALHOST:
+            print("using local dynamodb")
             self.endpoint_url = "http://localhost:4569"
             self.region_name = None
             self.use_gsi = True
             self.use_projections = True
         else:
+            print("using mock dynamodb")
             self.endpoint_url = None
             self.region_name = "us-west-1"
             self.use_gsi = False
@@ -52,15 +54,13 @@ class TestDynamodbStore(unittest.TestCase):
 
         self.table_prefix = "mlflow"
         self.store = DynamodbStore(
-            table_prefix=self.table_prefix,
+            store_uri="dynamodb:{}".format(self.table_prefix),
             endpoint_url=self.endpoint_url,
             region_name=self.region_name,
             use_gsi=self.use_gsi,
             use_projections=self.use_projections,
+            create_tables=True,
         )
-        print("create tables")
-        self.store.create_tables()
-        print("populate tables")
         self._populate_tables()
 
     def tearDown(self):
@@ -81,6 +81,7 @@ class TestDynamodbStore(unittest.TestCase):
     def _populate_tables(
         self, exp_count=3, run_count=2, param_count=5, metric_count=3, values_count=10
     ):
+        print("populate tables")
         self.experiments = [str(random_int(100, int(1e9))) for _ in range(exp_count)]
         self.exp_data = {}
         self.run_data = {}
@@ -147,13 +148,9 @@ class TestDynamodbStore(unittest.TestCase):
 
     def test_list_experiments(self):
         fs = self._get_store()
-        for exp in fs.list_experiments():
-            exp_id = exp.experiment_id
-            self.assertTrue(exp_id in self.experiments)
-            self.assertEqual(exp.name, self.exp_data[exp_id]["name"])
-            self.assertEqual(
-                exp.artifact_location, self.exp_data[exp_id]["artifact_location"]
-            )
+        experiment_ids = [e.experiment_id for e in fs.list_experiments()]
+        for exp_id in self.experiments:
+            self.assertTrue(exp_id in experiment_ids)
 
     def test_get_experiment_by_id(self):
         fs = self._get_store()
