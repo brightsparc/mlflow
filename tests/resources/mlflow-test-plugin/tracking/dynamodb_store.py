@@ -193,7 +193,7 @@ class DynamodbStore(AbstractStore):
             client = self._get_dynamodb_client()
             table_name = "{}_{}".format(self.table_prefix, DynamodbStore.EXPERIMENT_TABLE)
             response = client.describe_table(TableName=table_name)
-            return response["Table"] is None
+            return "Table" in response
         except botocore.exceptions.ClientError as error:
             print("error describing table", error)
             return False
