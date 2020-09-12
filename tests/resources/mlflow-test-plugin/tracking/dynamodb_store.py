@@ -40,6 +40,7 @@ from mlflow.utils.validation import (
 
 from mlflow.utils.env import get_env
 from mlflow.utils.search_utils import SearchUtils
+from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT
 
 _DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
 _DYNAMODB_TABLE_PREFIX_VAR = "MLFLOW_DYNAMODB_TABLE_PREFIX"
@@ -149,7 +150,7 @@ class DynamodbStore(AbstractStore):
     def __init__(
         self,
         store_uri=None,
-        artifact_uri=None,  # Not supported by must be included
+        artifact_uri=None,
         endpoint_url=None,
         region_name=None,
         use_gsi=True,
@@ -167,6 +168,7 @@ class DynamodbStore(AbstractStore):
         :param use_projections: Flag to use projections in queries, defaults to True.
         """
         super(DynamodbStore, self).__init__()
+        _ = artifact_uri  # Setting to avoid lint error
         table_prefix = urllib.parse.urlparse(store_uri).path if store_uri else None
         self.table_prefix = table_prefix or _default_table_prefix()
         self.endpoint_url = endpoint_url or _default_endpoint_url()
@@ -791,7 +793,7 @@ class DynamodbStore(AbstractStore):
             return _list_to_run_tag(response["Items"])
         return []
 
-    def _list_runs_ids(self, experiment_id, view_type=None):
+    def _list_runs_ids(self, experiment_id, view_type=None, max_results=SEARCH_MAX_RESULTS_DEFAULT):
         dynamodb = self._get_dynamodb_resource()
         table_name = "_".join([self.table_prefix, DynamodbStore.RUN_TABLE])
         table = dynamodb.Table(table_name)
@@ -813,7 +815,9 @@ class DynamodbStore(AbstractStore):
             )
         elif experiment_id:
             condition = Key("experiment_id").eq(experiment_id)
-            response = table.scan(FilterExpression=condition, ReturnConsumedCapacity="TOTAL",)
+            response = table.scan(
+                FilterExpression=condition, ReturnConsumedCapacity="TOTAL", Limit=max_results,
+            )
         else:
             response = table.scan(ReturnConsumedCapacity="TOTAL",)
 
@@ -859,8 +863,16 @@ class DynamodbStore(AbstractStore):
         runs, next_page_token = SearchUtils.paginate(sorted_runs, page_token, max_results)
         return runs, next_page_token
 
-    def list_run_infos(self, experiment_id, run_view_type):
-        run_ids = self._list_runs_ids(experiment_id, run_view_type)
+    def list_run_infos(
+        self,
+        experiment_id,
+        run_view_type,
+        max_results=SEARCH_MAX_RESULTS_DEFAULT,
+        order_by=None,
+        page_token=None,
+    ):
+        # Order and pagination not supported
+        run_ids = self._list_runs_ids(experiment_id, run_view_type, max_results)
         return [_dict_to_run_info(r) for r in self._get_run_list(run_ids)]
 
     def log_metric(self, run_id, metric):
@@ -952,3 +964,21 @@ class DynamodbStore(AbstractStore):
             raise e
         except Exception as e:
             raise MlflowException(e, INTERNAL_ERROR)
+
+    def record_logged_model(self, run_id, mlflow_model):
+        """
+        Record logged model information with tracking store. The list of logged model infos is
+        maintained in a mlflow.models tag in JSON format.
+
+        Note: The actual models are logged as artifacts via artifact repository.
+
+        :param run_id: String id for the run
+        :param mlflow_model: Model object to be recorded.
+
+        NB: This API is experimental and may change in the future. The default implementation is a
+        no-op.
+
+        :return: None.
+        """
+        # TODO: Implement
+
