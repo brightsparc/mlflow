@@ -11,8 +11,8 @@ setup(
     install_requires=["mlflow"],
     entry_points={
         # Define a Tracking Store plugin for tracking URIs with scheme 'file-plugin'
-        "mlflow.tracking_store": "file-plugin=mlflow_test_plugin.file_store:PluginFileStore",
-        "mlflow.tracking_store": "dynamodb=mlflow_test_plugin.dynamodb_store:DynamodbStore",
+        # "mlflow.tracking_store": "file-plugin=mlflow_test_plugin.file_store:PluginFileStore",
+        "mlflow.tracking_store": "dynamodb=tracking.dynamodb_store:DynamodbStore",
         # Define a ArtifactRepository plugin for artifact URIs with scheme 'file-plugin'
         "mlflow.artifact_repository": "file-plugin=mlflow_test_plugin.local_artifact:PluginLocalArtifactRepository",  # noqa
         # Define a RunContextProvider plugin. The entry point name for run context providers

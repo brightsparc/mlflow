@@ -17,7 +17,7 @@ from mlflow.entities import Metric, Param, RunStatus, RunTag, ViewType
 from mlflow.exceptions import MlflowException
 from mlflow.utils.env import get_env
 
-from mlflow_test_plugin.dynamodb_store import DynamodbStore
+from tracking.dynamodb_store import DynamodbStore
 
 _DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
 
