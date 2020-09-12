@@ -201,8 +201,10 @@ class DynamodbStore(AbstractStore):
             raise error
 
     def create_tables(self, rcu=1, wcu=1):
-        print("create tables")
+        print("creating tables...")
         client = self._get_dynamodb_client()
+        waiter = client.get_waiter("table_exists")
+
         table_name = "{}_{}".format(self.table_prefix, DynamodbStore.EXPERIMENT_TABLE)
         response = client.create_table(
             AttributeDefinitions=[
@@ -227,6 +229,8 @@ class DynamodbStore(AbstractStore):
         )
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise MlflowException("Unable to create table '%s'" % table_name)
+        waiter.wait(TableName=table_name)
+        print("table {} created".format(table_name))
 
         table_name = "{}_{}".format(self.table_prefix, DynamodbStore.RUN_TABLE)
         response = client.create_table(
@@ -252,6 +256,8 @@ class DynamodbStore(AbstractStore):
         )
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise MlflowException("Unable to create table '%s'" % table_name)
+        waiter.wait(TableName=table_name)
+        print("table {} created".format(table_name))
 
         for key in ["tag", "param", "metric"]:
             table_name = "{}_{}_{}".format(self.table_prefix, DynamodbStore.RUN_TABLE, key)
@@ -269,6 +275,8 @@ class DynamodbStore(AbstractStore):
             )
             if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
                 raise MlflowException("Unable to create table '%s'" % table_name)
+            waiter.wait(TableName=table_name)
+            print("table {} created".format(table_name))
 
     def delete_tables(self):
         print("delete tables")
