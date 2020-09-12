@@ -15,7 +15,15 @@ from moto.dynamodb2 import mock_dynamodb2
 from mlflow.entities.lifecycle_stage import LifecycleStage
 from mlflow.entities import Metric, Param, RunStatus, RunTag, ViewType
 from mlflow.exceptions import MlflowException
+from mlflow.utils.env import get_env
+
 from mlflow_test_plugin.dynamodb_store import DynamodbStore
+
+_DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
+
+
+def _default_endpoint_url():
+    return get_env(_DYNAMODB_ENDPOINT_URL_VAR)
 
 
 def random_int(lo=1, hi=1e10):
@@ -31,15 +39,14 @@ class TestDynamodbStore(unittest.TestCase):
 
     def setUp(self):
         # Test with localhost to test global secondary indices / projections
-        if TestDynamodbStore.TEST_LOCALHOST:
-            print("using local dynamodb")
-            self.endpoint_url = "http://localhost:4569"
+        self.endpoint_url = _default_endpoint_url()
+        if self.endpoint_url:
+            print("using local dynamodb: {}".format(self.endpoint_url))
             self.region_name = None
             self.use_gsi = True
             self.use_projections = True
         else:
             print("using mock dynamodb")
-            self.endpoint_url = None
             self.region_name = "us-west-1"
             self.use_gsi = False
             self.use_projections = False
@@ -64,7 +71,7 @@ class TestDynamodbStore(unittest.TestCase):
         self._populate_tables()
 
     def tearDown(self):
-        if TestDynamodbStore.TEST_LOCALHOST:
+        if self.endpoint_url:
             self.store.delete_tables()
         else:
             self.mock.stop()
@@ -121,8 +128,7 @@ class TestDynamodbStore(unittest.TestCase):
                     param_name = random_str(random_int(4, 12))
                     param_value = random_str(random_int(10, 15))
                     self._write_table(
-                        "run_param",
-                        {"run_id": run_id, "key": param_name, "value": param_value},
+                        "run_param", {"run_id": run_id, "key": param_name, "value": param_value},
                     )
                     params[param_name] = param_value
                 self.run_data[run_id]["params"] = params
@@ -136,12 +142,9 @@ class TestDynamodbStore(unittest.TestCase):
                         metric_value = random_int(i * 100, (i * 1) * 100)
                         timestamp += random_int(i * 1000, (i + 1) * 1000)
                         values.append((timestamp, metric_value))
-                        values_map.insert(
-                            0, {"timestamp": timestamp, "value": metric_value}
-                        )
+                        values_map.insert(0, {"timestamp": timestamp, "value": metric_value})
                     self._write_table(
-                        "run_metric",
-                        {"run_id": run_id, "key": metric_name, "metrics": values_map,},
+                        "run_metric", {"run_id": run_id, "key": metric_name, "metrics": values_map},
                     )
                     metrics[metric_name] = values
                 self.run_data[run_id]["metrics"] = metrics
@@ -158,9 +161,7 @@ class TestDynamodbStore(unittest.TestCase):
             exp = fs.get_experiment(exp_id)
             self.assertEqual(exp.experiment_id, exp_id)
             self.assertEqual(exp.name, self.exp_data[exp_id]["name"])
-            self.assertEqual(
-                exp.artifact_location, self.exp_data[exp_id]["artifact_location"]
-            )
+            self.assertEqual(exp.artifact_location, self.exp_data[exp_id]["artifact_location"])
 
         # test that fake experiments don't exist.
         # look for random experiment ids between 8000, 15000 since created ones are (100, 2000)
@@ -175,9 +176,7 @@ class TestDynamodbStore(unittest.TestCase):
             exp = fs.get_experiment_by_name(name)
             self.assertEqual(exp.experiment_id, exp_id)
             self.assertEqual(exp.name, self.exp_data[exp_id]["name"])
-            self.assertEqual(
-                exp.artifact_location, self.exp_data[exp_id]["artifact_location"]
-            )
+            self.assertEqual(exp.artifact_location, self.exp_data[exp_id]["artifact_location"])
 
         # test that fake experiments don't exist.
         # look up experiments with names of length 15 since created ones are of length 10
@@ -230,17 +229,11 @@ class TestDynamodbStore(unittest.TestCase):
 
         # delete it
         fs.delete_experiment(exp_id)
-        self.assertTrue(
-            exp_id not in self._extract_ids(fs.list_experiments(ViewType.ACTIVE_ONLY))
-        )
-        self.assertTrue(
-            exp_id in self._extract_ids(fs.list_experiments(ViewType.DELETED_ONLY))
-        )
+        self.assertTrue(exp_id not in self._extract_ids(fs.list_experiments(ViewType.ACTIVE_ONLY)))
+        self.assertTrue(exp_id in self._extract_ids(fs.list_experiments(ViewType.DELETED_ONLY)))
         experiments = self._extract_ids(fs.list_experiments(ViewType.ALL))
         self.assertTrue(exp_id in experiments)
-        self.assertEqual(
-            fs.get_experiment(exp_id).lifecycle_stage, LifecycleStage.DELETED
-        )
+        self.assertEqual(fs.get_experiment(exp_id).lifecycle_stage, LifecycleStage.DELETED)
 
         # restore it
         fs.restore_experiment(exp_id)
@@ -250,16 +243,10 @@ class TestDynamodbStore(unittest.TestCase):
         restored_2 = fs.get_experiment_by_name(exp_name)
         self.assertEqual(restored_2.experiment_id, exp_id)
         self.assertEqual(restored_2.name, exp_name)
-        self.assertTrue(
-            exp_id in self._extract_ids(fs.list_experiments(ViewType.ACTIVE_ONLY))
-        )
-        self.assertTrue(
-            exp_id not in self._extract_ids(fs.list_experiments(ViewType.DELETED_ONLY))
-        )
+        self.assertTrue(exp_id in self._extract_ids(fs.list_experiments(ViewType.ACTIVE_ONLY)))
+        self.assertTrue(exp_id not in self._extract_ids(fs.list_experiments(ViewType.DELETED_ONLY)))
         self.assertTrue(exp_id in self._extract_ids(fs.list_experiments(ViewType.ALL)))
-        self.assertEqual(
-            fs.get_experiment(exp_id).lifecycle_stage, LifecycleStage.ACTIVE
-        )
+        self.assertEqual(fs.get_experiment(exp_id).lifecycle_stage, LifecycleStage.ACTIVE)
 
     def test_rename_experiment(self):
         fs = self._get_store()
@@ -411,19 +398,17 @@ class TestDynamodbStore(unittest.TestCase):
         assert param.key == WEIRD_PARAM_NAME
         assert param.value == "Value"
 
-    @pytest.mark.skip(
-        reason="moto doesn't support list_append see:"
-        + "https://github.com/spulec/moto/issues/847"
-    )
     def test_weird_metric_names(self):
-        WEIRD_METRIC_NAME = "this is/a weird/but valid metric"
-        fs = self._get_store()
-        run_id = self._get_random_run_id()
-        fs.log_metric(run_id, Metric(WEIRD_METRIC_NAME, 10, 1234, 0))
-        metric = fs.get_metric(run_id, WEIRD_METRIC_NAME)
-        assert metric.key == WEIRD_METRIC_NAME
-        assert metric.value == 10
-        assert metric.timestamp == 1234
+        # moto doesn't support list_append see: https://github.com/spulec/moto/issues/847
+        if self.endpoint_url:
+            WEIRD_METRIC_NAME = "this is/a weird/but valid metric"
+            fs = self._get_store()
+            run_id = self._get_random_run_id()
+            fs.log_metric(run_id, Metric(WEIRD_METRIC_NAME, 10, 1234, 0))
+            metric = fs.get_metric(run_id, WEIRD_METRIC_NAME)
+            assert metric.key == WEIRD_METRIC_NAME
+            assert metric.value == 10
+            assert metric.timestamp == 1234
 
     def test_weird_tag_names(self):
         WEIRD_TAG_NAME = "this is/a weird/but valid tag"
