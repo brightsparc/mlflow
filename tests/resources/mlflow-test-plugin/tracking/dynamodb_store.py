@@ -18,6 +18,8 @@ from mlflow.entities import (
     RunStatus,
     RunTag,
     ViewType,
+    SourceType,
+    ExperimentTag,
 )
 from mlflow.entities.run_info import check_run_is_active, check_run_is_deleted
 from mlflow.exceptions import MlflowException
@@ -40,7 +42,8 @@ from mlflow.utils.validation import (
 
 from mlflow.utils.env import get_env
 from mlflow.utils.search_utils import SearchUtils
-from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT
+from mlflow.utils.uri import append_to_uri_path
+from mlflow.store.tracking import SEARCH_MAX_RESULTS_DEFAULT, SEARCH_MAX_RESULTS_THRESHOLD
 
 _DYNAMODB_ENDPOINT_URL_VAR = "MLFLOW_DYNAMODB_ENDPOINT_URL"
 _DYNAMODB_TABLE_PREFIX_VAR = "MLFLOW_DYNAMODB_TABLE_PREFIX"
@@ -54,28 +57,34 @@ def _default_table_prefix():
     return get_env(_DYNAMODB_TABLE_PREFIX_VAR) or "mlflow"
 
 
-def _dict_to_experiment(d):
-    return Experiment(
-        experiment_id=str(d["experiment_id"]),
-        name=d["name"],
-        artifact_location=d.get("artifact_location") or "",
-        lifecycle_stage=d.get("lifecycle_stage", LifecycleStage.ACTIVE),
-        tags=d.get("tags") or [],  # Store tags directly against experiment
-    )
+def _dict_to_experiment(experiment_dict):
+    dict_copy = experiment_dict.copy()
+
+    # 'experiment_id' was changed from int to string, so we must cast to string
+    # when reading legacy experiments
+    if isinstance(dict_copy["experiment_id"], int):
+        dict_copy["experiment_id"] = str(dict_copy["experiment_id"])
+    # Turn the key/value tags into list of experiment tags
+    if "tags" in dict_copy:
+        dict_copy["tags"] = [ExperimentTag(kv[0], kv[1]) for kv in dict_copy["tags"].items()]
+    return Experiment.from_dictionary(dict_copy)
 
 
-def _dict_to_run_info(d):
-    return RunInfo(
-        run_id=d["run_id"],
-        run_uuid=d["run_id"],
-        experiment_id=str(d["experiment_id"]),
-        user_id=d.get("user_id") or "",
-        status=d.get("status") or RunStatus.to_string(RunStatus.RUNNING),
-        start_time=int(d.get("start_time") or 0),
-        end_time=int(d.get("end_time") or 0),
-        lifecycle_stage=d.get("lifecycle_stage", LifecycleStage.ACTIVE),
-        artifact_uri=d.get("artifact_uri") or "",
-    )
+def _dict_to_run_info(run_info_dict):
+    dict_copy = run_info_dict.copy()
+    if "lifecycle_stage" not in dict_copy:
+        dict_copy["lifecycle_stage"] = LifecycleStage.ACTIVE
+    # 'status' is stored as an integer enum in meta file, but RunInfo.status field is a string.
+    # converting to string before hydrating RunInfo.
+    # If 'status' value not recorded in files, mark it as 'RUNNING' (default)
+    dict_copy["status"] = RunStatus.to_string(run_info_dict.get("status", RunStatus.RUNNING))
+
+    # 'experiment_id' was changed from int to string, so we must cast to string
+    # when reading legacy run_infos
+    if isinstance(dict_copy["experiment_id"], int):
+        dict_copy["experiment_id"] = str(dict_copy["experiment_id"])
+
+    return RunInfo.from_dictionary(dict_copy)
 
 
 def _list_to_run_tag(l):
@@ -88,27 +97,48 @@ def _list_to_run_param(l):
 
 # Return the first element in the list, which is the most recent if more than one.
 def _list_to_run_metric(l):
+    # metrics = sorted(rm["metrics"], key=lambda m: m.get("step", m["timestamp"]))[::-1]
+    return [_dict_to_run_metric_history(rm)[0] for rm in l]
+
+
+# Return the metrics order by step if provided else timestamp
+def _dict_to_run_metric_history(rm):
+    metrics = rm["metrics"][::-1]
     return [
         Metric(
             key=rm["key"],
-            value=float(rm["metrics"][0]["value"]),
-            timestamp=int(rm["metrics"][0]["timestamp"]),
-            step=0,
+            value=float(m["value"]),
+            timestamp=int(m["timestamp"]),
+            step=int(m.get("step", i)),
         )
-        for rm in l
+        for (i, m) in enumerate(metrics)
     ]
 
 
-# Return the metrics with most recent at the end of the list
-def _dict_to_run_metric_history(rm):
-    return [
-        Metric(key=rm["key"], value=float(m["value"]), timestamp=int(m["timestamp"]), step=i,)
-        for (i, m) in enumerate(rm["metrics"][::-1])
-    ]
+def _read_persisted_experiment_dict(experiment_dict):
+    dict_copy = experiment_dict.copy()
+
+    # 'experiment_id' was changed from int to string, so we must cast to string
+    # when reading legacy experiments
+    if isinstance(dict_copy["experiment_id"], int):
+        dict_copy["experiment_id"] = str(dict_copy["experiment_id"])
+    return Experiment.from_dictionary(dict_copy)
 
 
 def _entity_to_dict(obj):
     return {k: None if v == "" else v for k, v in dict(obj).items()}
+
+
+def _make_persisted_run_info_dict(run_info):
+    run_info_dict = _entity_to_dict(run_info)
+    if "status" in run_info_dict:
+        # 'status' is stored as an integer enum in meta file, but RunInfo.status field is a string.
+        # Convert from string to enum/int before storing.
+        run_info_dict["status"] = RunStatus.from_string(run_info.status)
+    else:
+        run_info_dict["status"] = RunStatus.RUNNING
+    run_info_dict["source_type"] = SourceType.LOCAL
+    return run_info_dict
 
 
 def _filter_view_type(d, view_type=None):
@@ -162,13 +192,13 @@ class DynamodbStore(AbstractStore):
 
         :param store_uri: DynamoDb scheme followed by table name 'dynamodb:mlflow'
         :param artifact_uri: Required artifacts scheme
-        :param endpoint_url: Optional endpoint url for testing Dynamodb Local
+        :param endpoint_url: Optional endpoint url for cing Dynamodb Local
         :param region_name: Optional Name of the AWS region for Dynamodb
         :param use_gsi: Flag to query Global Secondary Indices, defaults to True.
         :param use_projections: Flag to use projections in queries, defaults to True.
         """
         super(DynamodbStore, self).__init__()
-        _ = artifact_uri  # Setting to avoid lint error
+        self.artifact_root_uri = artifact_uri or "/"
         table_prefix = urllib.parse.urlparse(store_uri).path if store_uri else None
         self.table_prefix = table_prefix or _default_table_prefix()
         self.endpoint_url = endpoint_url or _default_endpoint_url()
@@ -197,7 +227,6 @@ class DynamodbStore(AbstractStore):
             response = client.describe_table(TableName=table_name)
             return "Table" in response
         except botocore.exceptions.ClientError as error:
-            print("error describing table", error)
             return False
         except Exception as error:
             raise error
@@ -364,6 +393,9 @@ class DynamodbStore(AbstractStore):
         return [_dict_to_experiment(e) for e in experiments]
 
     def _create_experiment_with_id(self, name, experiment_id, artifact_uri):
+        artifact_uri = artifact_uri or append_to_uri_path(
+            self.artifact_root_uri, str(experiment_id)
+        )
         dynamodb = self._get_dynamodb_resource()
         table_name = "_".join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
@@ -398,6 +430,7 @@ class DynamodbStore(AbstractStore):
         # len(list_all(..)) would not work when experiments are deleted.
         experiments_ids = [int(e.experiment_id) for e in self.list_experiments(ViewType.ALL)]
         experiment_id = str(max(experiments_ids) + 1 if experiments_ids else 0)
+        #  experiment_id = uuid.uuid4().hex
         return self._create_experiment_with_id(name, experiment_id, artifact_location)
 
     def _get_experiment(self, experiment_id):
@@ -447,7 +480,6 @@ class DynamodbStore(AbstractStore):
     def _update_experiment_status(
         self, experiment_id, before_lifecycle_stage, after_lifecycle_stage
     ):
-
         dynamodb = self._get_dynamodb_resource()
         table_name = "_".join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
         table = dynamodb.Table(table_name)
@@ -462,6 +494,19 @@ class DynamodbStore(AbstractStore):
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise MlflowException("DynamoDB connection error")
         return "Attributes" in response
+
+    def _add_experiment_tag(self, experiment_id, tag):
+        dynamodb = self._get_dynamodb_resource()
+        table_name = "_".join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
+        table = dynamodb.Table(table_name)
+        response = table.update_item(
+            Key={"experiment_id": experiment_id},
+            UpdateExpression="set tags.:tagKey = :tagValue",
+            ExpressionAttributeValues={":tagKey": tag.key, ":tagValue": tag.value},
+        )
+        if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
+            raise MlflowException("DynamoDB connection error")
+        print(response)
 
     def delete_experiment(self, experiment_id):
         """
@@ -656,10 +701,10 @@ class DynamodbStore(AbstractStore):
             end_time=None,
             lifecycle_stage=LifecycleStage.ACTIVE,
         )
-        if self._create_run_info(_entity_to_dict(run_info)):
+        if self._create_run_info(_make_persisted_run_info_dict(run_info)):
             for tag in tags:
                 self.set_tag(run_id, tag)
-            return Run(run_info=run_info, run_data=None)
+            return self.get_run(run_id)
 
     def get_run(self, run_id):
         """
@@ -691,7 +736,8 @@ class DynamodbStore(AbstractStore):
         condition = Key("run_id").eq(run_id)
         if metric_key:
             condition = And(condition, Key("key").eq(metric_key))
-        # If we don't support projections
+        # TODO: Can't just take the first metric in the list (need to sort by step/timestamp)
+        # TODO: Refactor to have metrics under experiment then filter for top N
         if self.use_projections:
             response = table.query(
                 ProjectionExpression="#key, #metrics[0].#value, #metrics[0].#timestamp",
@@ -845,6 +891,12 @@ class DynamodbStore(AbstractStore):
     def _search_runs(
         self, experiment_ids, filter_string, run_view_type, max_results, order_by, page_token,
     ):
+        if max_results > SEARCH_MAX_RESULTS_THRESHOLD:
+            raise MlflowException(
+                "Invalid value for request parameter max_results. It must be at "
+                "most {}, but got value {}".format(SEARCH_MAX_RESULTS_THRESHOLD, max_results),
+                INVALID_PARAMETER_VALUE,
+            )
         runs = []
         for experiment_id in experiment_ids:
             run_ids = self._list_runs_ids(experiment_id, run_view_type)
@@ -896,7 +948,13 @@ class DynamodbStore(AbstractStore):
             ExpressionAttributeNames={"#m": "metrics"},
             ExpressionAttributeValues={
                 ":e": [],
-                ":m": [{"value": Decimal(str(metric.value)), "timestamp": metric.timestamp}],
+                ":m": [
+                    {
+                        "value": Decimal(str(metric.value)),
+                        "timestamp": metric.timestamp,
+                        "step": metric.step,
+                    }
+                ],
             },
             ReturnValues="NONE",
             ReturnConsumedCapacity="TOTAL",
@@ -922,6 +980,81 @@ class DynamodbStore(AbstractStore):
         response = table.put_item(
             Item={"run_id": run_id, "key": param.key, "value": param.value},
             ReturnConsumedCapacity="TOTAL",
+            ReturnValues="ALL_OLD",
+        )
+        if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
+            raise MlflowException("DynamoDB connection error")
+        return True
+
+    def set_experiment_tag(self, experiment_id, tag):
+        """
+        Set a tag for the specified experiment
+
+        :param experiment_id: String id for the experiment
+        :param tag: :py:class:`mlflow.entities.ExperimentTag` instance to set
+        """
+        """
+        Set a tag for the specified experiment
+
+        :param experiment_id: String ID of the experiment
+        :param tag: ExperimentRunTag instance to log
+        """
+        _validate_tag_name(tag.key)
+        experiment = self.get_experiment(experiment_id)
+        if experiment.lifecycle_stage != LifecycleStage.ACTIVE:
+            raise MlflowException(
+                "The experiment {} must be in the 'active'"
+                "lifecycle_stage to set tags".format(experiment.experiment_id),
+                error_code=INVALID_PARAMETER_VALUE,
+            )
+        # Set the tags on the table
+        dynamodb = self._get_dynamodb_resource()
+        table_name = "_".join([self.table_prefix, DynamodbStore.EXPERIMENT_TABLE])
+        table = dynamodb.Table(table_name)
+        try:
+            # Create the tags if not exists
+            response = table.update_item(
+                Key={"experiment_id": experiment_id},
+                UpdateExpression="SET #a = :v",
+                ConditionExpression="attribute_not_exists(#a)",
+                ExpressionAttributeNames={"#a": "tags"},
+                ExpressionAttributeValues={":v": {}},
+            )
+        except botocore.exceptions.ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise e
+        # Update the tags key/value
+        response = table.update_item(
+            Key={"experiment_id": experiment_id},
+            UpdateExpression="SET #a.#b = :v",
+            ConditionExpression="attribute_exists(#a)",
+            ExpressionAttributeNames={"#a": "tags", "#b": tag.key},
+            ExpressionAttributeValues={":v": tag.value},
+        )
+        if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
+            raise MlflowException("DynamoDB connection error")
+        print(response)
+
+    def delete_tag(self, run_id, key):
+        """
+        Delete a tag from a run. This is irreversible.
+        :param run_id: String ID of the run
+        :param key: Name of the tag
+        """
+        _validate_run_id(run_id)
+        run_info = self._get_run_info(run_id)
+        check_run_is_active(run_info)
+        dynamodb = self._get_dynamodb_resource()
+        table_name = "_".join([self.table_prefix, DynamodbStore.TAGS_TABLE])
+        table = dynamodb.Table(table_name)
+        response = table.get_item(Key={"run_id": run_id, "key": key})
+        if not "Item" in response:
+            raise MlflowException(
+                "No tag with name: {} in run with id {}".format(key, run_id),
+                error_code=RESOURCE_DOES_NOT_EXIST,
+            )
+        response = table.delete_item(
+            Key={"run_id": run_id, "key": key}, ReturnConsumedCapacity="TOTAL"
         )
         if response["ResponseMetadata"]["HTTPStatusCode"] != 200:
             raise MlflowException("DynamoDB connection error")
@@ -953,6 +1086,8 @@ class DynamodbStore(AbstractStore):
         _validate_run_id(run_id)
         _validate_batch_log_data(metrics, params, tags)
         _validate_batch_log_limits(metrics, params, tags)
+        run_info = self._get_run_info(run_id)
+        check_run_is_active(run_info)
         try:
             for param in params:
                 self.log_param(run_id, param)
@@ -960,8 +1095,6 @@ class DynamodbStore(AbstractStore):
                 self.log_metric(run_id, metric)
             for tag in tags:
                 self.set_tag(run_id, tag)
-        except MlflowException as e:
-            raise e
         except Exception as e:
             raise MlflowException(e, INTERNAL_ERROR)
 
